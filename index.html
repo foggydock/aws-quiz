@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#232f3e">
+<title>AWS CLF 問題集</title>
+<!-- PWA（ホーム画面に置いてオフラインで使う） -->
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CLF問題集">
+<style>
+  :root{
+    --aws:#ff9900; --navy:#232f3e; --navy2:#2e3b4e;
+    --ok:#1f9d55; --ng:#e0245e; --bg:#f4f5f7; --card:#fff;
+    --line:#e2e5ea; --muted:#6b7280; --text:#1c2330;
+    --okbg:#eafaf0; --okbd:#bce8cd; --ngbg:#fdeaf0; --ngbd:#f5c2d3;
+    --choicebg:#fff; --secbtn:#eceef2; --bar:#eceef2; --tagbg:#eef1f5;
+  }
+  html[data-theme="dark"]{
+    --navy:#0e1620; --bg:#0f141b; --card:#1a2230;
+    --line:#2b3545; --muted:#9aa6b5; --text:#e8ecf2;
+    --ok:#34c77b; --ng:#ff5c86;
+    --okbg:#13301f; --okbd:#1f5d3a; --ngbg:#371320; --ngbd:#7a2540;
+    --choicebg:#222c3c; --secbtn:#28323f; --bar:#28323f; --tagbg:#28323f;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Segoe UI",sans-serif;
+    background:var(--bg); color:var(--text); line-height:1.7;
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  header{
+    background:var(--navy); color:#fff; padding:14px 16px;
+    padding-top:calc(14px + env(safe-area-inset-top));
+    position:sticky; top:0; z-index:10; display:flex; align-items:center; gap:8px;
+  }
+  header .logo{color:var(--aws); font-weight:800; font-size:18px}
+  header .sub{font-size:12px; opacity:.8; margin-left:auto}
+  main{max-width:640px; margin:0 auto; padding:16px}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px}
+  h2{font-size:17px; margin:0 0 10px}
+  p.muted{color:var(--muted); font-size:13px; margin:6px 0}
+  .big{font-size:40px; font-weight:800; line-height:1.1}
+  button{font-family:inherit; cursor:pointer}
+  .btn{
+    display:block; width:100%; border:none; border-radius:12px; padding:15px;
+    font-size:16px; font-weight:700; background:var(--aws); color:#1c1c1c; margin-top:8px;
+  }
+  .btn.secondary{background:var(--secbtn); color:var(--text)}
+  .btn:disabled{opacity:.45}
+  .choice{
+    display:block; width:100%; text-align:left; background:var(--choicebg); border:2px solid var(--line);
+    border-radius:12px; padding:14px; font-size:15.5px; margin-top:10px; color:var(--text);
+  }
+  .choice:active{transform:scale(.995)}
+  .choice.correct{border-color:var(--ok); background:var(--okbg)}
+  .choice.wrong{border-color:var(--ng); background:var(--ngbg)}
+  .choice .mark{font-weight:800; margin-right:6px}
+  .tag{display:inline-block; font-size:11px; background:var(--tagbg); color:var(--muted); border-radius:999px; padding:3px 9px; margin:2px 4px 2px 0}
+  .feedback{margin-top:14px; padding:13px; border-radius:12px; font-size:14.5px}
+  .feedback.ok{background:var(--okbg); border:1px solid var(--okbd)}
+  .feedback.ng{background:var(--ngbg); border:1px solid var(--ngbd)}
+  .feedback h3{margin:0 0 6px; font-size:14px}
+  textarea,input[type=text]{
+    width:100%; font-family:inherit; font-size:15px; border:2px solid var(--line);
+    border-radius:10px; padding:11px; resize:vertical; background:var(--choicebg); color:var(--text);
+  }
+  .row{display:flex; gap:8px}
+  .row .btn{margin-top:0}
+  nav{
+    position:sticky; bottom:0; background:var(--card); border-top:1px solid var(--line);
+    display:flex; max-width:640px; margin:0 auto; padding-bottom:env(safe-area-inset-bottom);
+  }
+  nav button{flex:1; background:none; border:none; padding:10px 4px 12px; font-size:11px; color:var(--muted)}
+  nav button .ic{display:block; font-size:20px; line-height:1.2}
+  nav button.active{color:var(--aws); font-weight:800}
+  /* ヘッダーのテーマ切替＆クイズ中断ボタン */
+  .iconbtn{background:rgba(255,255,255,.14); border:none; color:#fff; font-size:16px;
+    width:34px; height:34px; border-radius:50%; line-height:1; cursor:pointer}
+  .quit-row{display:flex; justify-content:flex-end; margin-bottom:2px}
+  .quit-btn{background:none; border:1px solid var(--line); color:var(--muted);
+    font-size:13px; padding:6px 12px; border-radius:999px; cursor:pointer}
+  .bar{height:10px; background:var(--bar); border-radius:999px; overflow:hidden; margin:4px 0 2px}
+  .bar > i{display:block; height:100%; background:var(--aws)}
+  .stat-line{display:flex; justify-content:space-between; font-size:13px; margin-top:10px}
+  .pill{font-size:12px; padding:2px 8px; border-radius:999px; background:var(--navy); color:#fff}
+  .list-item{border-top:1px solid var(--line); padding:10px 0; font-size:14px}
+  .list-item:first-child{border-top:none}
+  .hint{font-size:12.5px; color:var(--muted)}
+  .center{text-align:center}
+  details{font-size:13px; color:var(--muted); margin-top:8px}
+  .progress-dots{font-size:12px; color:var(--muted); margin-bottom:6px}
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">AWS</span>
+  <span style="font-weight:700">CLF 問題集</span>
+  <span class="sub" id="hdrSub"></span>
+  <button class="iconbtn" id="themeBtn" title="ダーク/ライト切替" onclick="toggleTheme()">🌙</button>
+</header>
+
+<main id="app"></main>
+
+<nav>
+  <button data-view="home" class="active"><span class="ic">📚</span>今日やる</button>
+  <button data-view="stats"><span class="ic">📊</span>成績</button>
+  <button data-view="settings"><span class="ic">⚙️</span>設定</button>
+</nav>
+
+<script>
+"use strict";
+
+/* ===== 保存キー ===== */
+const K_Q = "awsq_questions_v1";     // 問題データ
+const K_P = "awsq_progress_v1";      // 学習進捗（SM-2）
+const K_T = "awsq_theme_v1";         // テーマ（light / dark）
+const K_B = "awsq_batch_v1";         // 1回の出題数（0=全部）
+
+/* ===== 1回の出題数（通勤で区切る） ===== */
+function getBatch(){
+  const v = parseInt(localStorage.getItem(K_B), 10);
+  return isNaN(v) ? 10 : v;   // 既定10問
+}
+function setBatch(n){ localStorage.setItem(K_B, String(n)); render(); }
+
+/* ===== テーマ（ダークモード） ===== */
+function applyTheme(t){
+  document.documentElement.setAttribute("data-theme", t);
+  const btn = document.getElementById("themeBtn");
+  if(btn) btn.textContent = (t === "dark") ? "☀️" : "🌙";
+}
+function initTheme(){
+  let t = localStorage.getItem(K_T);
+  if(!t){ // 初回は端末の設定に従う
+    t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+  }
+  applyTheme(t);
+}
+function toggleTheme(){
+  const cur = document.documentElement.getAttribute("data-theme");
+  const next = (cur === "dark") ? "light" : "dark";
+  localStorage.setItem(K_T, next);
+  applyTheme(next);
+}
+
+/* ===== ドメイン（CLF-C02 4分野） ===== */
+const DOMAINS = [
+  "クラウドの概念",
+  "セキュリティとコンプライアンス",
+  "クラウドのテクノロジーとサービス",
+  "請求・料金・サポート"
+];
+
+/* ===== 状態 ===== */
+let questions = [];
+let progress = {};   // id -> {ef, interval, due, reps, lapses, seen, correctCount, wrongCount, lastQuality}
+let view = "home";
+let session = null;  // 出題中セッション
+
+/* ===== ユーティリティ ===== */
+const $ = sel => document.querySelector(sel);
+// 日付はローカル時刻基準で扱う（UTCのtoISOStringだとJSTで1日ずれるため）
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const todayStr = () => ymd(new Date());
+const addDays = (dateStr, n) => {
+  const [y,m,dd] = dateStr.split("-").map(Number);
+  const d = new Date(y, m-1, dd);
+  d.setDate(d.getDate() + n);
+  return ymd(d);
+};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function load(){
+  try{ questions = JSON.parse(localStorage.getItem(K_Q)) || []; }catch(e){ questions = []; }
+  try{ progress = JSON.parse(localStorage.getItem(K_P)) || {}; }catch(e){ progress = {}; }
+}
+function saveProgress(){ localStorage.setItem(K_P, JSON.stringify(progress)); }
+function saveQuestions(){ localStorage.setItem(K_Q, JSON.stringify(questions)); }
+
+function prog(id){
+  if(!progress[id]){
+    progress[id] = {ef:2.5, interval:0, due:todayStr(), reps:0, lapses:0, seen:false, correctCount:0, wrongCount:0, lastQuality:null};
+  }
+  return progress[id];
+}
+
+/* ===== SM-2（忘却曲線） ===== */
+// quality: 0〜5。正解=4以上、不正解=2 を基本にする。
+function applySM2(id, quality){
+  const p = prog(id);
+  p.seen = true;
+  p.lastQuality = quality;
+  if(quality >= 3){
+    p.correctCount++;
+    if(p.reps === 0) p.interval = 1;
+    else if(p.reps === 1) p.interval = 3;
+    else p.interval = Math.round(p.interval * p.ef);
+    p.reps++;
+  } else {
+    p.wrongCount++;
+    p.lapses++;
+    p.reps = 0;
+    p.interval = 1;   // 間違いは翌日また出す
+  }
+  // ease factor 更新（最低1.3）
+  p.ef = Math.max(1.3, p.ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
+  p.due = addDays(todayStr(), p.interval);
+  saveProgress();
+}
+
+/* 今日の出題対象：期限切れ(due<=今日) または 未学習 */
+function dueQuestions(){
+  const t = todayStr();
+  return questions.filter(q => {
+    const p = progress[q.id];
+    if(!p) return true;            // 未学習
+    return p.due <= t;             // 復習日が来ている
+  });
+}
+function weakQuestions(){
+  return questions.filter(q => {
+    const p = progress[q.id];
+    return p && (p.wrongCount > 0) ;
+  }).sort((a,b)=>(progress[b.id].wrongCount)-(progress[a.id].wrongCount));
+}
+
+/* ===== セッション制御 ===== */
+function startSession(pool, label, limit){
+  if(pool.length === 0){ alert("対象の問題がありません。"); return; }
+  // シャッフル
+  let arr = [...pool];
+  for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; }
+  if(limit && limit > 0) arr = arr.slice(0, limit);   // 1回の出題数で区切る
+  session = { queue: arr, idx:0, label, total:arr.length, done:0, correct:0, answered:false, retryLater:[] };
+  view = "quiz";
+  render();
+}
+
+function answerChoice(qi){
+  const q = session.queue[session.idx];
+  if(session.answered) return;
+  session.answered = true;
+  session.picked = qi;
+  const correct = qi === q.answer;
+  if(correct) session.correct++;
+  session.done++;
+  applySM2(q.id, correct ? 5 : 2);
+  if(!correct) session.retryLater.push(q); // 同セッション内で後でもう一度
+  renderQuiz();
+}
+
+function gradeTerm(quality){ // 記述式：自己採点（◎=5, △=3, ✕=1）
+  const q = session.queue[session.idx];
+  if(session.answered) return;
+  session.answered = true;
+  session.termGrade = quality;
+  session.done++;
+  if(quality >= 4) session.correct++;
+  applySM2(q.id, quality);
+  if(quality < 3) session.retryLater.push(q);
+  renderQuiz();
+}
+
+function nextQuestion(){
+  session.idx++;
+  session.answered = false;
+  session.revealed = false;
+  session.myAnswer = "";
+  session.picked = null;
+  if(session.idx >= session.queue.length){
+    // セッション末：間違えた問題を後回し再出題
+    if(session.retryLater.length){
+      session.queue = session.queue.concat(session.retryLater);
+      session.retryLater = [];
+    }
+  }
+  if(session.idx >= session.queue.length){ finishSession(); return; }
+  renderQuiz();
+}
+
+function quitSession(){
+  // 途中でやめてもOK。各問の結果はすでに保存済み。
+  if(session && session.done > 0){ finishSession(); }   // やった分の成績を表示
+  else { session=null; view="home"; render(); }
+}
+
+function finishSession(){
+  const acc = session.done ? Math.round(session.correct / session.done * 100) : 0;
+  const html = `
+    <div class="card center">
+      <h2>おつかれさまでした 🎉</h2>
+      <p class="big">${acc}%</p>
+      <p class="muted">${session.correct} / ${session.done} 問正解</p>
+      <p class="hint">間違えた問題は忘却曲線に沿って近いうちにまた出ます。</p>
+      <button class="btn" onclick="view='home';session=null;render()">ホームに戻る</button>
+    </div>`;
+  session = null; view="home";
+  $("#app").innerHTML = html;
+  syncNav();
+}
+
+/* ===== 画面描画 ===== */
+function render(){
+  syncNav();
+  if(questions.length === 0 && view !== "settings"){
+    $("#app").innerHTML = emptyState();
+    return;
+  }
+  if(view === "home") renderHome();
+  else if(view === "quiz") renderQuiz();
+  else if(view === "stats") renderStats();
+  else if(view === "settings") renderSettings();
+  $("#hdrSub").textContent = questions.length ? `全${questions.length}問` : "";
+}
+
+function emptyState(){
+  return `<div class="card center">
+    <h2>ようこそ</h2>
+    <p class="muted">まだ問題が入っていません。<br>「設定」から問題データ（JSON）を読み込んでください。</p>
+    <button class="btn" onclick="view='settings';render()">⚙️ 設定を開く</button>
+  </div>`;
+}
+
+function renderHome(){
+  const due = dueQuestions();
+  const newCount = questions.filter(q=>!progress[q.id]).length;
+  const weak = weakQuestions();
+  const batch = getBatch();
+  const willDo = (batch > 0) ? Math.min(batch, due.length) : due.length;
+  const batchNote = (batch > 0 && due.length > batch)
+    ? `<p class="hint">今回はこの中から ${willDo} 問（残りは次回）</p>` : "";
+  const topCard = due.length ? `
+    <div class="card center">
+      <p class="muted">今日やるべき問題</p>
+      <p class="big">${due.length}<span style="font-size:18px"> 問</span></p>
+      <p class="hint">未学習 ${newCount} 問 ／ 復習 ${due.length-newCount} 問</p>
+      ${batchNote}
+      <button class="btn" onclick='startSession(dueQuestions(),"今日の分",getBatch())'>▶ ${willDo}問 始める</button>
+    </div>` : `
+    <div class="card center">
+      <p class="big" style="font-size:30px">今日の分は完了！🎉</p>
+      <p class="hint">復習のタイミングが来た問題はまたここに出ます。<br>もっとやりたいときは下の「全問ランダム」でどうぞ。</p>
+    </div>`;
+  $("#app").innerHTML = topCard + `
+    <div class="card">
+      <h2>ほかの出題</h2>
+      <button class="btn secondary" onclick='startSession(questions.slice(),"全問")'>全${questions.length}問をランダム</button>
+      <button class="btn secondary" onclick='startSession(weakQuestions(),"苦手だけ")' ${weak.length?'':'disabled'}>苦手な問題だけ（${weak.length}問）</button>
+    </div>
+    <p class="hint center">電車の中でもオフラインで動きます。解いた結果は端末に保存されます。</p>
+  `;
+}
+
+function renderQuiz(){
+  const q = session.queue[session.idx];
+  const num = Math.min(session.idx+1, session.queue.length);
+  let body = "";
+  if(q.type === "term"){
+    body = renderTerm(q);
+  } else {
+    body = renderChoice(q);
+  }
+  $("#app").innerHTML = `
+    <div class="quit-row"><button class="quit-btn" onclick="quitSession()">やめる ✕</button></div>
+    <div class="card">
+      <div class="progress-dots">${esc(session.label)} ・ ${num} / ${session.queue.length} 問</div>
+      <div>${(q.section?`<span class="tag">${esc(q.section)}</span>`:"")}${q.type==="term"?'<span class="tag">記述</span>':''}</div>
+      <h2 style="margin-top:8px">${esc(q.question)}</h2>
+      ${body}
+    </div>`;
+}
+
+function renderChoice(q){
+  let html = "";
+  q.choices.forEach((c,i)=>{
+    let cls = "choice";
+    let mark = "";
+    if(session.answered){
+      if(i === q.answer){ cls += " correct"; mark = '<span class="mark">○</span>'; }
+      else if(i === session.picked){ cls += " wrong"; mark = '<span class="mark">×</span>'; }
+    }
+    html += `<button class="${cls}" onclick="answerChoice(${i})">${mark}${esc(c)}</button>`;
+  });
+  if(session.answered){
+    const ok = session.picked === q.answer;
+    html += `
+      <div class="feedback ${ok?'ok':'ng'}">
+        <h3>${ok?'正解 ◯':'不正解 ✕'}</h3>
+        <div>${esc(q.explanation||"")}</div>
+      </div>
+      <button class="btn" onclick="nextQuestion()">次へ ▶</button>`;
+  }
+  return html;
+}
+
+function renderTerm(q){
+  if(!session.revealed){
+    return `
+      <textarea id="termInput" rows="4" placeholder="用語の意味を自分の言葉で書いてみましょう"></textarea>
+      <button class="btn" onclick="revealTerm()">答えを見る</button>
+      <p class="hint">※書かずに頭で答えてから「答えを見る」でもOK</p>`;
+  } else {
+    const mine = session.myAnswer || "";
+    const head = `
+      ${mine?`<div class="feedback"><h3>あなたの答え</h3><div>${esc(mine)}</div></div>`:''}
+      <div class="feedback ok"><h3>模範解答</h3><div>${esc(q.answer)}</div>
+        ${q.explanation?`<p class="hint" style="margin-top:8px">${esc(q.explanation)}</p>`:''}</div>`;
+    if(!session.answered){
+      // 採点まち
+      return head + `
+        <p class="muted center" style="margin-top:10px">自己採点してください</p>
+        <div class="row">
+          <button class="btn" style="background:var(--ok);color:#fff" onclick="gradeTerm(5)">◎ 言えた</button>
+          <button class="btn secondary" onclick="gradeTerm(3)">△ あいまい</button>
+          <button class="btn" style="background:var(--ng);color:#fff" onclick="gradeTerm(1)">✕ ダメ</button>
+        </div>`;
+    } else {
+      // 採点ずみ → 次へ
+      const label = session.termGrade >= 4 ? "◎ 言えた" : (session.termGrade >= 3 ? "△ あいまい" : "✕ ダメ");
+      return head + `
+        <p class="muted center" style="margin-top:10px">自己採点：<b>${label}</b></p>
+        <button class="btn" onclick="nextQuestion()">次へ ▶</button>`;
+    }
+  }
+}
+function revealTerm(){
+  const el = document.getElementById("termInput");
+  session.myAnswer = el ? el.value.trim() : "";
+  session.revealed = true;   // 答えを表示（採点はまだ）
+  renderQuiz();
+}
+
+function renderStats(){
+  const total = questions.length;
+  const seen = questions.filter(q=>progress[q.id]&&progress[q.id].seen).length;
+  let cAll=0, wAll=0;
+  questions.forEach(q=>{ const p=progress[q.id]; if(p){cAll+=p.correctCount; wAll+=p.wrongCount;} });
+  const accAll = (cAll+wAll)? Math.round(cAll/(cAll+wAll)*100):0;
+
+  // ドメイン別
+  let domHtml = "";
+  DOMAINS.forEach(dom=>{
+    const qs = questions.filter(q=>q.domain===dom);
+    if(qs.length===0) return;
+    let c=0,w=0;
+    qs.forEach(q=>{const p=progress[q.id]; if(p){c+=p.correctCount;w+=p.wrongCount;}});
+    const acc=(c+w)?Math.round(c/(c+w)*100):0;
+    domHtml += `<div class="stat-line"><span>${esc(dom)}</span><span>${(c+w)?acc+'%':'未'} <span class="hint">(${qs.length}問)</span></span></div>
+      <div class="bar"><i style="width:${acc}%"></i></div>`;
+  });
+
+  // 間違い多い順
+  const weak = weakQuestions().slice(0,8);
+  let weakHtml = weak.length ? weak.map(q=>{
+    const p=progress[q.id];
+    return `<div class="list-item">✕${p.wrongCount}回 / ◯${p.correctCount}回　${esc(q.question)}</div>`;
+  }).join("") : '<p class="hint">まだ間違えた問題はありません。</p>';
+
+  // これからの復習予定
+  const t=todayStr();
+  const upcoming = {};
+  questions.forEach(q=>{const p=progress[q.id]; if(p&&p.seen){ upcoming[p.due]=(upcoming[p.due]||0)+1; }});
+  const upDates = Object.keys(upcoming).sort().slice(0,6);
+  const upHtml = upDates.length ? upDates.map(d=>`<div class="stat-line"><span>${d===t?'今日':d}</span><span>${upcoming[d]}問</span></div>`).join("") : '<p class="hint">まだ予定はありません。</p>';
+
+  $("#app").innerHTML = `
+    <div class="card center">
+      <p class="muted">全体の正答率</p>
+      <p class="big">${accAll}%</p>
+      <p class="hint">学習済 ${seen}/${total}問 ・ 累計 ◯${cAll} ✕${wAll}</p>
+    </div>
+    <div class="card"><h2>分野別の正答率</h2>${domHtml||'<p class="hint">データなし</p>'}</div>
+    <div class="card"><h2>間違いが多い問題</h2>${weakHtml}</div>
+    <div class="card"><h2>これからの復習予定</h2>${upHtml}</div>
+  `;
+}
+
+function renderSettings(){
+  const batchOpts = [[5,"5問"],[10,"10問"],[20,"20問"],[0,"全部"]].map(([v,l])=>
+    `<button class="btn ${getBatch()===v?'':'secondary'}" style="flex:1;min-width:68px" onclick="setBatch(${v})">${l}</button>`
+  ).join("");
+  $("#app").innerHTML = `
+    <div class="card">
+      <h2>1回の出題数</h2>
+      <p class="muted">「今日の分」を何問ずつ出すか。通勤時間に合わせて選べます。</p>
+      <div class="row" style="flex-wrap:wrap">${batchOpts}</div>
+    </div>
+    <div class="card">
+      <h2>問題データの読み込み</h2>
+      <p class="muted">JSONファイルを選ぶか、内容を貼り付けて読み込みます。</p>
+      <input type="file" id="fileInput" accept=".json,application/json" style="margin:8px 0">
+      <textarea id="pasteInput" rows="4" placeholder="ここにJSONを貼り付けてもOK"></textarea>
+      <button class="btn" onclick="importPasted()">貼り付けたJSONを読み込む</button>
+      <p class="hint">現在 ${questions.length} 問を保持中。</p>
+    </div>
+    <div class="card">
+      <h2>バックアップ</h2>
+      <button class="btn secondary" onclick="exportProgress()">学習記録を書き出す（JSON）</button>
+      <p class="hint">機種変更や万一に備えて。問題データもまとめて出力します。</p>
+    </div>
+    <div class="card">
+      <h2>リセット</h2>
+      <button class="btn secondary" onclick="resetProgress()">学習記録だけ消す</button>
+      <button class="btn secondary" onclick="resetAll()" style="color:var(--ng)">全部消す（問題も）</button>
+    </div>
+    <details><summary>このアプリについて</summary>
+      <p>個人学習用。オフラインで動作し、データは端末内(localStorage)にのみ保存されます。
+      忘却曲線はSM-2方式を簡略化して実装しています。</p>
+    </details>
+  `;
+  document.getElementById("fileInput").addEventListener("change", e=>{
+    const f = e.target.files[0]; if(!f) return;
+    const r = new FileReader();
+    r.onload = ()=> doImport(r.result);
+    r.readAsText(f);
+  });
+}
+
+/* ===== インポート / エクスポート ===== */
+function doImport(text){
+  try{
+    const data = JSON.parse(text);
+    const arr = Array.isArray(data) ? data : (data.questions || []);
+    if(!Array.isArray(arr) || arr.length===0) throw new Error("問題が見つかりません");
+    // 既存とマージ（idで上書き）
+    const map = {};
+    questions.forEach(q=>map[q.id]=q);
+    arr.forEach(q=>{ if(q.id) map[q.id]=q; });
+    questions = Object.values(map);
+    saveQuestions();
+    alert(`読み込み成功：${arr.length}問を追加/更新しました（合計${questions.length}問）。`);
+    view="home"; render();
+  }catch(err){
+    alert("読み込み失敗：" + err.message);
+  }
+}
+function importPasted(){
+  const t = document.getElementById("pasteInput").value.trim();
+  if(!t){ alert("JSONを貼り付けてください。"); return; }
+  doImport(t);
+}
+function exportProgress(){
+  const blob = new Blob([JSON.stringify({questions, progress, exportedAt:new Date().toISOString()}, null, 2)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `aws-quiz-backup-${todayStr()}.json`;
+  a.click();
+}
+function resetProgress(){
+  if(confirm("学習記録（正答率・復習予定）を消します。問題データは残ります。よろしいですか？")){
+    progress = {}; saveProgress(); alert("学習記録を消しました。"); render();
+  }
+}
+function resetAll(){
+  if(confirm("問題データも学習記録も全部消します。元に戻せません。よろしいですか？")){
+    localStorage.removeItem(K_Q); localStorage.removeItem(K_P);
+    questions=[]; progress={}; alert("すべて消しました。"); view="settings"; render();
+  }
+}
+
+/* ===== ナビ ===== */
+function syncNav(){
+  document.querySelectorAll("nav button").forEach(b=>{
+    b.classList.toggle("active", b.dataset.view === (view==="quiz"?"home":view));
+  });
+}
+document.querySelectorAll("nav button").forEach(b=>{
+  b.addEventListener("click", ()=>{
+    // クイズ中でも自由に移動OK（各問は回答時に保存済み）
+    session=null; view=b.dataset.view; render();
+  });
+});
+
+/* ===== サービスワーカー登録（オフライン起動用） ===== */
+if("serviceWorker" in navigator){
+  window.addEventListener("load", ()=>{
+    navigator.serviceWorker.register("sw.js").catch(()=>{});
+  });
+}
+
+/* ===== 起動 ===== */
+initTheme();
+load();
+// 初回・データ無しのとき同梱のquestions.jsonを試しに読む（PC/サーバー時のみ成功）
+if(questions.length === 0){
+  fetch("questions.json").then(r=>r.ok?r.text():Promise.reject()).then(txt=>{
+    try{ const d=JSON.parse(txt); const arr=d.questions||d; if(arr.length){ questions=arr; saveQuestions(); } }catch(e){}
+    render();
+  }).catch(()=>render());
+} else {
+  render();
+}
+</script>
+</body>
+</html>
