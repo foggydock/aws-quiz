@@ -12,6 +12,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CLF問題集">
+<!-- クラウド同期（Supabase）。オフライン時は読み込めず、その時はローカルのみで動作 -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
     --aws:#ff9900; --navy:#232f3e; --navy2:#2e3b4e;
@@ -183,6 +185,106 @@ function load(){
 function saveProgress(){ localStorage.setItem(K_P, JSON.stringify(progress)); }
 function saveQuestions(){ localStorage.setItem(K_Q, JSON.stringify(questions)); }
 
+/* ===== クラウド同期（Supabase・任意ログイン） =====
+   方針: ローカル(localStorage)が常に手元の正。ログイン中かつ電波がある時だけ、
+   問題はクラウドから取得、進捗は updated_at で新しい方を採用して双方向に揃える。 */
+const SB_URL = "https://icxbyltorjpfexmwxzga.supabase.co";
+const SB_KEY = "sb_publishable_6qgfCo_xbhbjb3Lr__j-Yg_Y7Zk2yWH";
+let supa = null;
+try{ if(window.supabase) supa = window.supabase.createClient(SB_URL, SB_KEY); }catch(e){ supa = null; }
+let currentUser = null;
+let syncing = false;
+let syncStatus = "";
+function cloudReady(){ return !!(supa && currentUser); }
+function setSyncStatus(s){ syncStatus = s; const el = document.getElementById("syncStatus"); if(el) el.textContent = s; }
+
+function progToRow(id){
+  const p = progress[id];
+  return { user_id: currentUser.id, question_id: id, ef: p.ef, interval: p.interval,
+    due: p.due, reps: p.reps, lapses: p.lapses, seen: p.seen,
+    correct_count: p.correctCount, wrong_count: p.wrongCount, last_quality: p.lastQuality,
+    updated_at: p.updatedAt || new Date().toISOString() };
+}
+async function pushProgress(id){
+  if(!cloudReady() || !progress[id]) return;
+  try{ await supa.from("aws_progress").upsert(progToRow(id)); }catch(e){}
+}
+async function pushAllProgress(){
+  if(!cloudReady()) return;
+  const rows = Object.keys(progress).map(progToRow);
+  if(rows.length){ try{ await supa.from("aws_progress").upsert(rows); }catch(e){} }
+}
+async function pushQuestions(arr){
+  if(!cloudReady()) return;
+  const rows = arr.filter(q=>q.id).map(q=>({ user_id: currentUser.id, id: q.id,
+    domain: q.domain||null, section: q.section||null, type: q.type||null,
+    question: q.question||null, choices: q.choices||null,
+    answer: (q.answer===undefined?null:q.answer), explanation: q.explanation||null,
+    keywords: q.keywords||null, updated_at: new Date().toISOString() }));
+  if(rows.length){ try{ await supa.from("aws_questions").upsert(rows); }catch(e){} }
+}
+async function syncDownQuestions(){
+  if(!cloudReady()) return;
+  const { data, error } = await supa.from("aws_questions").select("*");
+  if(error || !data || !data.length) return; // クラウドに無ければローカル維持
+  const map = {}; questions.forEach(q=>map[q.id]=q);
+  data.forEach(r=>{ map[r.id] = { id:r.id, domain:r.domain, section:r.section, type:r.type,
+    question:r.question, choices:r.choices, answer:r.answer, explanation:r.explanation, keywords:r.keywords }; });
+  questions = Object.values(map); saveQuestions();
+}
+async function syncDownProgress(){
+  if(!cloudReady()) return;
+  const { data, error } = await supa.from("aws_progress").select("*");
+  if(error || !data) return;
+  data.forEach(r=>{
+    const local = progress[r.question_id];
+    const cloudT = r.updated_at || "";
+    const localT = (local && local.updatedAt) || "";
+    if(!local || cloudT > localT){
+      progress[r.question_id] = { ef:r.ef, interval:r.interval, due:r.due, reps:r.reps,
+        lapses:r.lapses, seen:r.seen, correctCount:r.correct_count, wrongCount:r.wrong_count,
+        lastQuality:r.last_quality, updatedAt:r.updated_at };
+    }
+  });
+  saveProgress();
+}
+async function syncAll(){
+  if(!cloudReady() || syncing) return;
+  if(navigator.onLine === false){ setSyncStatus("オフライン（電波がある時に同期します）"); return; }
+  syncing = true; setSyncStatus("同期中…");
+  try{
+    await syncDownQuestions();   // 問題はクラウド→ローカル（増えた分を取得）
+    await syncDownProgress();    // 進捗は新しい方を採用
+    await pushAllProgress();     // マージ後のローカルをクラウドへ
+    setSyncStatus("同期済み");
+  }catch(e){ setSyncStatus("同期エラー（次に電波がある時に再試行）"); }
+  finally{ syncing = false; if(view==="settings"||view==="home") render(); }
+}
+
+/* 認証 */
+function val(id){ const el = document.getElementById(id); return el ? el.value.trim() : ""; }
+async function signIn(){
+  if(!supa){ alert("いまオフラインのため、ログインできません。電波がある時にお試しください。"); return; }
+  const email = val("authEmail"), password = val("authPass");
+  if(!email || !password){ alert("メールアドレスとパスワードを入力してください。"); return; }
+  setSyncStatus("ログイン中…");
+  const { error } = await supa.auth.signInWithPassword({ email, password });
+  if(error){ alert("ログイン失敗：" + error.message); setSyncStatus(""); }
+}
+async function signUp(){
+  if(!supa){ alert("いまオフラインのため、登録できません。電波がある時にお試しください。"); return; }
+  const email = val("authEmail"), password = val("authPass");
+  if(!email || !password){ alert("メールアドレスとパスワードを入力してください。"); return; }
+  if(password.length < 6){ alert("パスワードは6文字以上にしてください。"); return; }
+  const { data, error } = await supa.auth.signUp({ email, password });
+  if(error){ alert("登録失敗：" + error.message); return; }
+  if(!data.session){ alert("確認メールを送りました。メール内のリンクを開いてから、もう一度ログインしてください。"); }
+}
+async function signOut(){
+  if(supa){ try{ await supa.auth.signOut(); }catch(e){} }
+  currentUser = null; setSyncStatus(""); render();
+}
+
 function prog(id){
   if(!progress[id]){
     progress[id] = {ef:2.5, interval:0, due:todayStr(), reps:0, lapses:0, seen:false, correctCount:0, wrongCount:0, lastQuality:null};
@@ -211,7 +313,9 @@ function applySM2(id, quality){
   // ease factor 更新（最低1.3）
   p.ef = Math.max(1.3, p.ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
   p.due = addDays(todayStr(), p.interval);
+  p.updatedAt = new Date().toISOString();   // 同期の新旧判定用
   saveProgress();
+  pushProgress(id);   // ログイン中なら裏でクラウドへ（オフライン時は無視）
 }
 
 /* 今日の出題対象：期限切れ(due<=今日) または 未学習 */
@@ -485,12 +589,36 @@ function renderSettings(){
   const batchOpts = [[5,"5問"],[10,"10問"],[20,"20問"],[0,"全部"]].map(([v,l])=>
     `<button class="btn ${getBatch()===v?'':'secondary'}" style="flex:1;min-width:68px" onclick="setBatch(${v})">${l}</button>`
   ).join("");
-  $("#app").innerHTML = `
+  let authCard;
+  if(!supa){
+    authCard = `<div class="card"><h2>アカウント（同期）</h2>
+      <p class="hint">いまオフラインのため同期は使えません。電波がある時に開くとログインできます。</p></div>`;
+  } else if(currentUser){
+    authCard = `<div class="card"><h2>アカウント（同期）</h2>
+      <p class="muted">${esc(currentUser.email||"ログイン中")}</p>
+      <p class="hint" id="syncStatus">${esc(syncStatus||"同期済み")}</p>
+      <button class="btn" onclick="syncAll()">今すぐ同期</button>
+      <button class="btn secondary" onclick="signOut()" style="color:var(--ng)">ログアウト</button>
+    </div>`;
+  } else {
+    authCard = `<div class="card"><h2>アカウント（同期）</h2>
+      <p class="muted">ログインすると、問題と学習記録がクラウドに保存されます。機種を変えても消えず、PCで増やした問題も自動で届きます。</p>
+      <input type="email" id="authEmail" placeholder="メールアドレス" autocomplete="username">
+      <input type="password" id="authPass" placeholder="パスワード（6文字以上）" autocomplete="current-password" style="margin-top:8px">
+      <div class="row" style="margin-top:8px">
+        <button class="btn" onclick="signIn()">ログイン</button>
+        <button class="btn secondary" onclick="signUp()">新規登録</button>
+      </div>
+      <p class="hint" id="syncStatus">${esc(syncStatus)}</p>
+    </div>`;
+  }
+  $("#app").innerHTML = authCard + `
     <div class="card">
       <h2>1回の出題数</h2>
       <p class="muted">「今日の分」を何問ずつ出すか。通勤時間に合わせて選べます。</p>
       <div class="row" style="flex-wrap:wrap">${batchOpts}</div>
-    </div>
+    </div>`;
+  $("#app").innerHTML += `
     <div class="card">
       <h2>問題データの読み込み</h2>
       <p class="muted">JSONファイルを選ぶか、内容を貼り付けて読み込みます。</p>
@@ -534,7 +662,9 @@ function doImport(text){
     arr.forEach(q=>{ if(q.id) map[q.id]=q; });
     questions = Object.values(map);
     saveQuestions();
-    alert(`読み込み成功：${arr.length}問を追加/更新しました（合計${questions.length}問）。`);
+    if(cloudReady()){ pushQuestions(arr); }   // ログイン中ならクラウドへ→他端末にも届く
+    alert(`読み込み成功：${arr.length}問を追加/更新しました（合計${questions.length}問）。`
+      + (cloudReady() ? "\nクラウドにも同期しました。" : ""));
     view="home"; render();
   }catch(err){
     alert("読み込み失敗：" + err.message);
@@ -552,16 +682,21 @@ function exportProgress(){
   a.download = `aws-quiz-backup-${todayStr()}.json`;
   a.click();
 }
-function resetProgress(){
-  if(confirm("学習記録（正答率・復習予定）を消します。問題データは残ります。よろしいですか？")){
-    progress = {}; saveProgress(); alert("学習記録を消しました。"); render();
-  }
+async function resetProgress(){
+  if(!confirm("学習記録（正答率・復習予定）を消します。問題データは残ります。よろしいですか？")) return;
+  progress = {}; saveProgress();
+  if(cloudReady()){ try{ await supa.from("aws_progress").delete().eq("user_id", currentUser.id); }catch(e){} }
+  alert("学習記録を消しました。"); render();
 }
-function resetAll(){
-  if(confirm("問題データも学習記録も全部消します。元に戻せません。よろしいですか？")){
-    localStorage.removeItem(K_Q); localStorage.removeItem(K_P);
-    questions=[]; progress={}; alert("すべて消しました。"); view="settings"; render();
+async function resetAll(){
+  if(!confirm("問題データも学習記録も全部消します。元に戻せません。よろしいですか？")) return;
+  localStorage.removeItem(K_Q); localStorage.removeItem(K_P);
+  questions=[]; progress={};
+  if(cloudReady()){
+    try{ await supa.from("aws_progress").delete().eq("user_id", currentUser.id); }catch(e){}
+    try{ await supa.from("aws_questions").delete().eq("user_id", currentUser.id); }catch(e){}
   }
+  alert("すべて消しました。"); view="settings"; render();
 }
 
 /* ===== ナビ ===== */
@@ -582,6 +717,21 @@ if("serviceWorker" in navigator){
   window.addEventListener("load", ()=>{
     navigator.serviceWorker.register("sw.js").catch(()=>{});
   });
+}
+
+/* ===== 認証状態の監視（ログインしていれば同期） ===== */
+if(supa){
+  supa.auth.onAuthStateChange((_event, sess)=>{
+    currentUser = sess ? sess.user : null;
+    if(currentUser){ syncAll(); }
+    if(view==="settings") render();
+  });
+  // 起動時に既存セッションを確認（onAuthStateChangeでも拾えるが念のため）
+  supa.auth.getSession().then(({ data })=>{
+    if(data && data.session){ currentUser = data.session.user; syncAll(); }
+  }).catch(()=>{});
+  // 電波が戻ったら自動で同期
+  window.addEventListener("online", ()=>{ if(cloudReady()) syncAll(); });
 }
 
 /* ===== 起動 ===== */
