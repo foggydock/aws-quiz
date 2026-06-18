@@ -191,7 +191,13 @@ function saveQuestions(){ localStorage.setItem(K_Q, JSON.stringify(questions)); 
 const SB_URL = "https://icxbyltorjpfexmwxzga.supabase.co";
 const SB_KEY = "sb_publishable_6qgfCo_xbhbjb3Lr__j-Yg_Y7Zk2yWH";
 let supa = null;
-try{ if(window.supabase) supa = window.supabase.createClient(SB_URL, SB_KEY); }catch(e){ supa = null; }
+try{
+  if(window.supabase) supa = window.supabase.createClient(SB_URL, SB_KEY, {
+    // このアプリ専用のログイン保存キー。同じfoggydock.github.io上の他アプリ（歴史ログ等）と
+    // ログインを共有しないよう独立させる。
+    auth: { storageKey: "awsq-auth", persistSession: true, autoRefreshToken: true }
+  });
+}catch(e){ supa = null; }
 let currentUser = null;
 let syncing = false;
 let syncStatus = "";
