@@ -111,6 +111,7 @@
 
 <nav>
   <button data-view="home" class="active"><span class="ic">📚</span>今日やる</button>
+  <button data-view="zukan"><span class="ic">📖</span>図鑑</button>
   <button data-view="stats"><span class="ic">📊</span>成績</button>
   <button data-view="settings"><span class="ic">⚙️</span>設定</button>
 </nav>
@@ -161,9 +162,13 @@ const DOMAINS = [
 
 /* ===== 状態 ===== */
 let questions = [];
+let terms = [];                    // 用語図鑑
+const K_TERMS = "awsq_terms_v1";
 let progress = {};   // id -> {ef, interval, due, reps, lapses, seen, correctCount, wrongCount, lastQuality}
 let view = "home";
 let session = null;  // 出題中セッション
+let zukanQuery = "";               // 図鑑の検索語
+let zukanTerm = null;              // 図鑑で開いている用語名（null=一覧）
 
 /* ===== ユーティリティ ===== */
 const $ = sel => document.querySelector(sel);
@@ -180,10 +185,12 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 
 function load(){
   try{ questions = JSON.parse(localStorage.getItem(K_Q)) || []; }catch(e){ questions = []; }
+  try{ terms = JSON.parse(localStorage.getItem(K_TERMS)) || []; }catch(e){ terms = []; }
   try{ progress = JSON.parse(localStorage.getItem(K_P)) || {}; }catch(e){ progress = {}; }
 }
 function saveProgress(){ localStorage.setItem(K_P, JSON.stringify(progress)); }
 function saveQuestions(){ localStorage.setItem(K_Q, JSON.stringify(questions)); }
+function saveTerms(){ localStorage.setItem(K_TERMS, JSON.stringify(terms)); }
 
 /* ===== クラウド同期（Supabase・任意ログイン） =====
    方針: ローカル(localStorage)が常に手元の正。ログイン中かつ電波がある時だけ、
@@ -256,6 +263,23 @@ async function syncDownProgress(){
   });
   saveProgress();
 }
+async function pushTerms(arr){
+  if(!cloudReady()) return;
+  const rows = (arr||[]).filter(t=>t.term).map(t=>({ user_id: currentUser.id, term: t.term,
+    reading: t.reading||null, definition: t.definition||null, category: t.category||null,
+    related: t.related||null, source: t.source||null, updated_at: new Date().toISOString() }));
+  if(rows.length){ const { error } = await supa.from("aws_terms").upsert(rows); if(error) throw error; }
+}
+async function syncDownTerms(){
+  if(!cloudReady()) return;
+  const { data, error } = await supa.from("aws_terms").select("*");
+  if(error) throw error;
+  if(!data || !data.length) return;
+  const map = {}; terms.forEach(t=>map[t.term]=t);
+  data.forEach(r=>{ map[r.term] = { term:r.term, reading:r.reading, definition:r.definition,
+    category:r.category, related:r.related||[], source:r.source }; });
+  terms = Object.values(map); saveTerms();
+}
 async function syncAll(){
   if(!cloudReady() || syncing) return;
   if(navigator.onLine === false){ setSyncStatus("オフライン（電波がある時に同期します）"); return; }
@@ -263,11 +287,13 @@ async function syncAll(){
   try{
     await syncDownQuestions();                            // 問題：クラウド→ローカル（増えた分を取得）
     if(questions.length) await pushQuestions(questions);  // 問題：ローカル→クラウド（持っている端末から押し上げ）
+    await syncDownTerms();                                // 用語：クラウド→ローカル
+    if(terms.length) await pushTerms(terms);              // 用語：ローカル→クラウド
     await syncDownProgress();                             // 進捗：新しい方を採用
     await pushAllProgress();                              // 進捗：マージ後のローカルをクラウドへ
-    setSyncStatus("同期済み（問題 " + questions.length + " 問）");
+    setSyncStatus("同期済み（問題 " + questions.length + " 問・用語 " + terms.length + " 語）");
   }catch(e){ setSyncStatus("同期エラー: " + (e.message || e.code || e)); }
-  finally{ syncing = false; if(view==="settings"||view==="home") render(); }
+  finally{ syncing = false; if(view==="settings"||view==="home"||view==="zukan") render(); }
 }
 
 /* 認証 */
@@ -427,6 +453,7 @@ function render(){
   }
   if(view === "home") renderHome();
   else if(view === "quiz") renderQuiz();
+  else if(view === "zukan") renderZukan();
   else if(view === "stats") renderStats();
   else if(view === "settings") renderSettings();
   $("#hdrSub").textContent = questions.length ? `全${questions.length}問` : "";
@@ -594,6 +621,71 @@ function renderStats(){
   `;
 }
 
+/* ===== 図鑑（用語） ===== */
+function openTerm(name){ zukanTerm = name; render(); }
+function closeTerm(){ zukanTerm = null; render(); }
+function questionsByTerm(name){
+  return questions.filter(q => (q.keywords||[]).some(k => k.includes(name) || name.includes(k)) || (q.question||"").includes(name));
+}
+function focusSearch(){ const el = document.getElementById("zukanSearch"); if(el){ const v = el.value; el.focus(); el.value=""; el.value=v; } }
+
+function renderZukan(){
+  if(zukanTerm){ renderTermDetail(zukanTerm); return; }
+  const q = zukanQuery.trim().toLowerCase();
+  const cats = {};
+  terms.forEach(t=>{
+    if(q){
+      const hay = (t.term+" "+(t.reading||"")+" "+(t.definition||"")+" "+(t.category||"")).toLowerCase();
+      if(!hay.includes(q)) return;
+    }
+    const c = t.category || "その他";
+    (cats[c] = cats[c] || []).push(t);
+  });
+  const catNames = Object.keys(cats);
+  let body = "";
+  if(catNames.length === 0){
+    body = `<div class="card"><p class="hint">${terms.length ? "該当する用語がありません。" : "まだ用語がありません。問題データを読み込むと増えます。"}</p></div>`;
+  }
+  catNames.forEach(c=>{
+    body += `<div class="card"><h2>${esc(c)} <span class="hint">(${cats[c].length})</span></h2>`;
+    cats[c].forEach(t=>{
+      body += `<div class="list-item" style="cursor:pointer" onclick='openTerm(${JSON.stringify(t.term)})'>
+        <b>${esc(t.term)}</b>${t.reading?` <span class="hint">${esc(t.reading)}</span>`:""}</div>`;
+    });
+    body += `</div>`;
+  });
+  const catCount = new Set(terms.map(t=>t.category||"その他")).size;
+  $("#app").innerHTML = `
+    <div class="card center">
+      <p class="muted">用語図鑑</p>
+      <p class="big">${terms.length}<span style="font-size:18px"> 語</span></p>
+      <p class="hint">カテゴリ ${catCount} ／ 教材を足すほど増えていきます</p>
+      <input type="text" id="zukanSearch" placeholder="🔍 用語で検索" value="${esc(zukanQuery)}"
+        oninput="zukanQuery=this.value; renderZukan();">
+    </div>` + body;
+  focusSearch();
+}
+
+function renderTermDetail(name){
+  const t = terms.find(x=>x.term===name);
+  if(!t){ zukanTerm=null; renderZukan(); return; }
+  const rel = questionsByTerm(name);
+  const relLinks = (t.related||[]).filter(r=>terms.some(x=>x.term===r))
+    .map(r=>`<button class="tag" style="cursor:pointer;border:none" onclick='openTerm(${JSON.stringify(r)})'>${esc(r)} ›</button>`).join(" ");
+  $("#app").innerHTML = `
+    <div class="quit-row"><button class="quit-btn" onclick="closeTerm()">← 図鑑にもどる</button></div>
+    <div class="card">
+      ${t.category?`<span class="tag">${esc(t.category)}</span>`:""}
+      <h2 style="margin:8px 0 0">${esc(t.term)}</h2>
+      ${t.reading?`<p class="hint" style="margin:2px 0 10px">${esc(t.reading)}</p>`:""}
+      <p>${esc(t.definition||"")}</p>
+      ${relLinks?`<p class="muted" style="margin:14px 0 6px">関連用語</p><div>${relLinks}</div>`:""}
+      ${rel.length
+        ? `<button class="btn" style="margin-top:16px" onclick='startSession(questionsByTerm(${JSON.stringify(name)}),"用語: "+${JSON.stringify(t.term)})'>この用語の問題を解く（${rel.length}問）</button>`
+        : `<p class="hint" style="margin-top:16px">この用語に関する問題はまだありません。</p>`}
+    </div>`;
+}
+
 function renderSettings(){
   const batchOpts = [[5,"5問"],[10,"10問"],[20,"20問"],[0,"全部"]].map(([v,l])=>
     `<button class="btn ${getBatch()===v?'':'secondary'}" style="flex:1;min-width:68px" onclick="setBatch(${v})">${l}</button>`
@@ -672,7 +764,17 @@ function doImport(text){
     questions = Object.values(map);
     saveQuestions();
     if(cloudReady()){ pushQuestions(arr); }   // ログイン中ならクラウドへ→他端末にも届く
-    alert(`読み込み成功：${arr.length}問を追加/更新しました（合計${questions.length}問）。`
+    // 用語（図鑑）も同梱されていれば取り込む
+    const tarr = Array.isArray(data.terms) ? data.terms : [];
+    if(tarr.length){
+      const tmap = {}; terms.forEach(t=>tmap[t.term]=t);
+      tarr.forEach(t=>{ if(t.term) tmap[t.term]=t; });
+      terms = Object.values(tmap); saveTerms();
+      if(cloudReady()){ pushTerms(tarr); }
+    }
+    alert(`読み込み成功：${arr.length}問`
+      + (tarr.length ? `・用語${tarr.length}語` : "")
+      + `を追加/更新しました（合計 問題${questions.length} / 用語${terms.length}）。`
       + (cloudReady() ? "\nクラウドにも同期しました。" : ""));
     view="home"; render();
   }catch(err){
@@ -699,11 +801,12 @@ async function resetProgress(){
 }
 async function resetAll(){
   if(!confirm("問題データも学習記録も全部消します。元に戻せません。よろしいですか？")) return;
-  localStorage.removeItem(K_Q); localStorage.removeItem(K_P);
-  questions=[]; progress={};
+  localStorage.removeItem(K_Q); localStorage.removeItem(K_P); localStorage.removeItem(K_TERMS);
+  questions=[]; progress={}; terms=[];
   if(cloudReady()){
     try{ await supa.from("aws_progress").delete().eq("user_id", currentUser.id); }catch(e){}
     try{ await supa.from("aws_questions").delete().eq("user_id", currentUser.id); }catch(e){}
+    try{ await supa.from("aws_terms").delete().eq("user_id", currentUser.id); }catch(e){}
   }
   alert("すべて消しました。"); view="settings"; render();
 }
@@ -717,7 +820,7 @@ function syncNav(){
 document.querySelectorAll("nav button").forEach(b=>{
   b.addEventListener("click", ()=>{
     // クイズ中でも自由に移動OK（各問は回答時に保存済み）
-    session=null; view=b.dataset.view; render();
+    session=null; zukanTerm=null; view=b.dataset.view; render();
   });
 });
 
@@ -748,8 +851,8 @@ initTheme();
 load();
 // 初回・データ無しのとき同梱のquestions.jsonを試しに読む（PC/サーバー時のみ成功）
 if(questions.length === 0){
-  fetch("questions.json").then(r=>r.ok?r.text():Promise.reject()).then(txt=>{
-    try{ const d=JSON.parse(txt); const arr=d.questions||d; if(arr.length){ questions=arr; saveQuestions(); } }catch(e){}
+  fetch("questions.json", {cache:"no-store"}).then(r=>r.ok?r.text():Promise.reject()).then(txt=>{
+    try{ const d=JSON.parse(txt); const arr=d.questions||d; if(arr.length){ questions=arr; saveQuestions(); } if(d.terms&&d.terms.length){ terms=d.terms; saveTerms(); } }catch(e){}
     render();
   }).catch(()=>render());
 } else {
