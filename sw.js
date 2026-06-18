@@ -2,7 +2,7 @@
    方針: アプリ本体(index.html等)はキャッシュしてオフラインでも起動できるようにする。
    stale-while-revalidate = まずキャッシュを即返し、裏で最新を取り直して次回に反映。
    ※ questions.json は端末ごとに違う/公開版には無いので precache しない（取得失敗してもアプリは動く）。 */
-const CACHE = "awsq-v6";
+const CACHE = "awsq-v7";
 const ASSETS = [
   "./",
   "./index.html",

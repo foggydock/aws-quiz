@@ -218,7 +218,7 @@ async function pushProgress(id){
 async function pushAllProgress(){
   if(!cloudReady()) return;
   const rows = Object.keys(progress).map(progToRow);
-  if(rows.length){ try{ await supa.from("aws_progress").upsert(rows); }catch(e){} }
+  if(rows.length){ const { error } = await supa.from("aws_progress").upsert(rows); if(error) throw error; }
 }
 async function pushQuestions(arr){
   if(!cloudReady()) return;
@@ -227,12 +227,13 @@ async function pushQuestions(arr){
     question: q.question||null, choices: q.choices||null,
     answer: (q.answer===undefined?null:q.answer), explanation: q.explanation||null,
     keywords: q.keywords||null, updated_at: new Date().toISOString() }));
-  if(rows.length){ try{ await supa.from("aws_questions").upsert(rows); }catch(e){} }
+  if(rows.length){ const { error } = await supa.from("aws_questions").upsert(rows); if(error) throw error; }
 }
 async function syncDownQuestions(){
   if(!cloudReady()) return;
   const { data, error } = await supa.from("aws_questions").select("*");
-  if(error || !data || !data.length) return; // クラウドに無ければローカル維持
+  if(error) throw error;
+  if(!data || !data.length) return; // クラウドに無ければローカル維持
   const map = {}; questions.forEach(q=>map[q.id]=q);
   data.forEach(r=>{ map[r.id] = { id:r.id, domain:r.domain, section:r.section, type:r.type,
     question:r.question, choices:r.choices, answer:r.answer, explanation:r.explanation, keywords:r.keywords }; });
@@ -241,7 +242,8 @@ async function syncDownQuestions(){
 async function syncDownProgress(){
   if(!cloudReady()) return;
   const { data, error } = await supa.from("aws_progress").select("*");
-  if(error || !data) return;
+  if(error) throw error;
+  if(!data) return;
   data.forEach(r=>{
     const local = progress[r.question_id];
     const cloudT = r.updated_at || "";
@@ -259,11 +261,12 @@ async function syncAll(){
   if(navigator.onLine === false){ setSyncStatus("オフライン（電波がある時に同期します）"); return; }
   syncing = true; setSyncStatus("同期中…");
   try{
-    await syncDownQuestions();   // 問題はクラウド→ローカル（増えた分を取得）
-    await syncDownProgress();    // 進捗は新しい方を採用
-    await pushAllProgress();     // マージ後のローカルをクラウドへ
-    setSyncStatus("同期済み");
-  }catch(e){ setSyncStatus("同期エラー（次に電波がある時に再試行）"); }
+    await syncDownQuestions();                            // 問題：クラウド→ローカル（増えた分を取得）
+    if(questions.length) await pushQuestions(questions);  // 問題：ローカル→クラウド（持っている端末から押し上げ）
+    await syncDownProgress();                             // 進捗：新しい方を採用
+    await pushAllProgress();                              // 進捗：マージ後のローカルをクラウドへ
+    setSyncStatus("同期済み（問題 " + questions.length + " 問）");
+  }catch(e){ setSyncStatus("同期エラー: " + (e.message || e.code || e)); }
   finally{ syncing = false; if(view==="settings"||view==="home") render(); }
 }
 
