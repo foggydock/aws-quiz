@@ -849,15 +849,17 @@ if(supa){
 /* ===== 起動 ===== */
 initTheme();
 load();
-// 初回・データ無しのとき同梱のquestions.jsonを試しに読む（PC/サーバー時のみ成功）
-if(questions.length === 0){
-  fetch("questions.json", {cache:"no-store"}).then(r=>r.ok?r.text():Promise.reject()).then(txt=>{
-    try{ const d=JSON.parse(txt); const arr=d.questions||d; if(arr.length){ questions=arr; saveQuestions(); } if(d.terms&&d.terms.length){ terms=d.terms; saveTerms(); } }catch(e){}
-    render();
-  }).catch(()=>render());
-} else {
+render();
+// 同梱のquestions.jsonがあれば「常に最新」を取り込む（localhost等で有効・配信版は404で無視）。
+// 問題・用語をidでマージし、ログイン中ならクラウドへも反映（=新素材の取り込み口）。
+fetch("questions.json", {cache:"no-store"}).then(r=>r.ok?r.json():Promise.reject()).then(d=>{
+  const qarr = d.questions || (Array.isArray(d)?d:[]);
+  const tarr = d.terms || [];
+  if(qarr.length){ const m={}; questions.forEach(q=>m[q.id]=q); qarr.forEach(q=>{ if(q.id) m[q.id]=q; }); questions=Object.values(m); saveQuestions(); }
+  if(tarr.length){ const m={}; terms.forEach(t=>m[t.term]=t); tarr.forEach(t=>{ if(t.term) m[t.term]=t; }); terms=Object.values(m); saveTerms(); }
   render();
-}
+  if(cloudReady()) syncAll();   // ログイン済みなら取り込んだ最新をクラウドへ
+}).catch(()=>{});
 </script>
 </body>
 </html>
