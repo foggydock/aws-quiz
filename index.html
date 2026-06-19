@@ -376,6 +376,15 @@ function startSession(pool, label, limit){
   let arr = [...pool];
   for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; }
   if(limit && limit > 0) arr = arr.slice(0, limit);   // 1回の出題数で区切る
+  // 4択は出題のたびに選択肢をシャッフル（位置で暗記するのを防ぐ）。元データは変えずセッション用に複製。
+  arr = arr.map(q=>{
+    if(q.type==="choice" && Array.isArray(q.choices) && q.choices.length>1){
+      const order = q.choices.map((_,i)=>i);
+      for(let i=order.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [order[i],order[j]]=[order[j],order[i]]; }
+      return Object.assign({}, q, { choices: order.map(i=>q.choices[i]), answer: order.indexOf(q.answer) });
+    }
+    return q;
+  });
   session = { queue: arr, idx:0, label, total:arr.length, done:0, correct:0, answered:false, retryLater:[] };
   view = "quiz";
   render();
