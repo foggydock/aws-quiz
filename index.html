@@ -688,6 +688,24 @@ function renderTermDetail(name){
     </div>`;
 }
 
+/* 「最新を取り込む」: 同梱questions.jsonの最新を取り込み（localhostで有効）、ログイン中ならクラウドへ反映 */
+async function pullLatest(){
+  setSyncStatus("取り込み中…");
+  try{
+    const r = await fetch("questions.json", {cache:"no-store"});
+    if(r.ok){
+      const d = await r.json();
+      const qarr = d.questions || (Array.isArray(d)?d:[]);
+      const tarr = d.terms || [];
+      if(qarr.length){ const m={}; questions.forEach(q=>m[q.id]=q); qarr.forEach(q=>{ if(q.id) m[q.id]=q; }); questions=Object.values(m); saveQuestions(); }
+      if(tarr.length){ const m={}; terms.forEach(t=>m[t.term]=t); tarr.forEach(t=>{ if(t.term) m[t.term]=t; }); terms=Object.values(m); saveTerms(); }
+    }
+  }catch(e){}
+  if(cloudReady()){ await syncAll(); } else { setSyncStatus(""); render(); }
+  alert("取り込み完了：問題 " + questions.length + " 問・用語 " + terms.length + " 語"
+    + (cloudReady() ? "\nクラウドにも同期しました。他の端末は「今すぐ同期」で反映されます。" : "\n（ログインすると他の端末にも同期されます）"));
+}
+
 function renderSettings(){
   const batchOpts = [[5,"5問"],[10,"10問"],[20,"20問"],[0,"全部"]].map(([v,l])=>
     `<button class="btn ${getBatch()===v?'':'secondary'}" style="flex:1;min-width:68px" onclick="setBatch(${v})">${l}</button>`
@@ -700,8 +718,10 @@ function renderSettings(){
     authCard = `<div class="card"><h2>アカウント（同期）</h2>
       <p class="muted">${esc(currentUser.email||"ログイン中")}</p>
       <p class="hint" id="syncStatus">${esc(syncStatus||"同期済み")}</p>
-      <button class="btn" onclick="syncAll()">今すぐ同期</button>
+      <button class="btn" onclick="pullLatest()">🔄 最新を取り込む</button>
+      <button class="btn secondary" onclick="syncAll()">今すぐ同期</button>
       <button class="btn secondary" onclick="signOut()" style="color:var(--ng)">ログアウト</button>
+      <p class="hint" style="margin-top:8px">「最新を取り込む」＝新しい問題・用語を取り込んでクラウドへ反映（PCで使用）。スマホは「今すぐ同期」だけでOK。</p>
     </div>`;
   } else {
     authCard = `<div class="card"><h2>アカウント（同期）</h2>
