@@ -124,6 +124,7 @@ const K_Q = "awsq_questions_v1";     // 問題データ
 const K_P = "awsq_progress_v1";      // 学習進捗（SM-2）
 const K_T = "awsq_theme_v1";         // テーマ（light / dark）
 const K_B = "awsq_batch_v1";         // 1回の出題数（0=全部）
+const K_F = "awsq_secfilter_v1";     // 分野しぼり込み（""=すべて）。UI設定なのでクラウド同期しない
 
 /* ===== 1回の出題数（通勤で区切る） ===== */
 function getBatch(){
@@ -131,6 +132,45 @@ function getBatch(){
   return isNaN(v) ? 10 : v;   // 既定10問
 }
 function setBatch(n){ localStorage.setItem(K_B, String(n)); render(); }
+
+/* ===== 分野しぼり込み（SM-2はそのまま、出題対象の母集団を絞るだけ） =====
+   section の「7-3」等の番号をキーにする。データから自動生成するので、章を足せばメニューも自動で増える。 */
+function getFilter(){ return localStorage.getItem(K_F) || ""; }
+function setFilter(k){
+  if(k) localStorage.setItem(K_F, k); else localStorage.removeItem(K_F);
+  render();
+}
+function secKey(q){
+  const s = (q.section || "").trim();
+  let m = s.match(/^(\d+-\d+)/);          if(m) return m[1];        // 例: 7-3
+  m = s.match(/^第(\d+)章/);               if(m) return "ch"+m[1];   // 例: 第5章 → ch5
+  return "other";
+}
+function secBase(q){   // 番号と（補足）を取り除いた話題名。例: "7-3 Amazon S3（容量）" → "Amazon S3"
+  let s = (q.section || "").trim().replace(/（.*?）\s*$/,"").replace(/\(.*?\)\s*$/,"");
+  s = s.replace(/^\s*\d+-\d+\s*/,"").replace(/^第\d+章\s*/,"");
+  return s || "その他";
+}
+function sectionGroups(){   // [{key, label, n}] をキー順で返す
+  const map = {};
+  questions.forEach(q=>{
+    const k = secKey(q);
+    if(!map[k]) map[k] = { key:k, bases:[], n:0 };
+    map[k].n++;
+    const b = secBase(q);
+    if(map[k].bases.indexOf(b) < 0) map[k].bases.push(b);
+  });
+  return Object.values(map).map(g=>{
+    let topics = g.bases.slice(0,2).join("・");
+    if(g.bases.length > 2) topics += "ほか";
+    const prefix = /^\d/.test(g.key) ? g.key+" " : "";
+    return { key:g.key, label:prefix+topics, n:g.n };
+  }).sort((a,b)=>a.key.localeCompare(b.key, "ja", {numeric:true}));
+}
+function applyFilter(arr){
+  const f = getFilter();
+  return f ? arr.filter(q=>secKey(q)===f) : arr;
+}
 
 /* ===== テーマ（ダークモード） ===== */
 function applyTheme(t){
@@ -470,30 +510,49 @@ function emptyState(){
 }
 
 function renderHome(){
-  const due = dueQuestions();
-  const newCount = questions.filter(q=>!progress[q.id]).length;
-  const weak = weakQuestions();
+  const f = getFilter();
+  const due = applyFilter(dueQuestions());
+  const allPool = applyFilter(questions);
+  const newCount = allPool.filter(q=>!progress[q.id]).length;
+  const weak = applyFilter(weakQuestions());
   const batch = getBatch();
   const willDo = (batch > 0) ? Math.min(batch, due.length) : due.length;
   const batchNote = (batch > 0 && due.length > batch)
     ? `<p class="hint">今回はこの中から ${willDo} 問（残りは次回）</p>` : "";
+
+  // 分野しぼり込みセレクタ（SM-2はそのまま、母集団を絞るだけ）
+  const groups = sectionGroups();
+  const opts = [`<option value="">すべて（全${questions.length}問）</option>`]
+    .concat(groups.map(g=>`<option value="${esc(g.key)}" ${g.key===f?"selected":""}>${esc(g.label)}（${g.n}問）</option>`))
+    .join("");
+  const filterCard = `
+    <div class="card">
+      <label class="muted" for="secFilter" style="display:block;margin-bottom:6px">📂 分野でしぼる</label>
+      <select id="secFilter" onchange="setFilter(this.value)"
+        style="width:100%;padding:10px;border-radius:10px;font-size:16px">${opts}</select>
+      ${f?`<p class="hint" style="margin-top:6px">いまは絞り込み中。復習タイミング（忘却曲線）はそのまま、この分野の中だけ出ます。</p>`:""}
+    </div>`;
+
+  const doneMsg = f
+    ? `この分野で復習のタイミングが来た問題は今ありません。<br>下の「この分野をランダム」で先取り練習もできます。`
+    : `復習のタイミングが来た問題はまたここに出ます。<br>もっとやりたいときは下の「全問ランダム」でどうぞ。`;
   const topCard = due.length ? `
     <div class="card center">
-      <p class="muted">今日やるべき問題</p>
+      <p class="muted">今日やるべき問題${f?"（絞り込み中）":""}</p>
       <p class="big">${due.length}<span style="font-size:18px"> 問</span></p>
       <p class="hint">未学習 ${newCount} 問 ／ 復習 ${due.length-newCount} 問</p>
       ${batchNote}
-      <button class="btn" onclick='startSession(dueQuestions(),"今日の分",getBatch())'>▶ ${willDo}問 始める</button>
+      <button class="btn" onclick='startSession(applyFilter(dueQuestions()),"今日の分",getBatch())'>▶ ${willDo}問 始める</button>
     </div>` : `
     <div class="card center">
       <p class="big" style="font-size:30px">今日の分は完了！🎉</p>
-      <p class="hint">復習のタイミングが来た問題はまたここに出ます。<br>もっとやりたいときは下の「全問ランダム」でどうぞ。</p>
+      <p class="hint">${doneMsg}</p>
     </div>`;
-  $("#app").innerHTML = topCard + `
+  $("#app").innerHTML = filterCard + topCard + `
     <div class="card">
       <h2>ほかの出題</h2>
-      <button class="btn secondary" onclick='startSession(questions.slice(),"全問")'>全${questions.length}問をランダム</button>
-      <button class="btn secondary" onclick='startSession(weakQuestions(),"苦手だけ")' ${weak.length?'':'disabled'}>苦手な問題だけ（${weak.length}問）</button>
+      <button class="btn secondary" onclick='startSession(applyFilter(questions.slice()),${f?'"この分野"':'"全問"'})'>${f?`この分野をランダム（${allPool.length}問）`:`全${questions.length}問をランダム`}</button>
+      <button class="btn secondary" onclick='startSession(applyFilter(weakQuestions()),"苦手だけ")' ${weak.length?'':'disabled'}>苦手な問題だけ（${weak.length}問）</button>
     </div>
     <p class="hint center">電車の中でもオフラインで動きます。解いた結果は端末に保存されます。</p>
   `;
