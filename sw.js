@@ -1,8 +1,8 @@
 /* AWS CLF 問題集 サービスワーカー
    方針: アプリ本体(index.html等)はキャッシュしてオフラインでも起動できるようにする。
    stale-while-revalidate = まずキャッシュを即返し、裏で最新を取り直して次回に反映。
-   ※ questions.json は端末ごとに違う/公開版には無いので precache しない（取得失敗してもアプリは動く）。 */
-const CACHE = "awsq-v13";
+   ※ questions.json は端末ごとに違う/公開版には無いので precache せず、常にnetwork-onlyで取得する（キャッシュに古い問題数が残るのを防ぐ）。 */
+const CACHE = "awsq-v16";
 const ASSETS = [
   "./",
   "./index.html",
@@ -28,7 +28,9 @@ self.addEventListener("activate", e => {
 
 self.addEventListener("fetch", e => {
   const req = e.request;
-  if (req.method !== "GET" || new URL(req.url).origin !== self.location.origin) return;
+  const url = new URL(req.url);
+  if (req.method !== "GET" || url.origin !== self.location.origin) return;
+  if (url.pathname.endsWith("questions.json")) { e.respondWith(fetch(req)); return; }
   e.respondWith(
     caches.match(req).then(cached => {
       const network = fetch(req).then(res => {

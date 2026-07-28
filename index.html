@@ -22,7 +22,11 @@
     --okbg:#eafaf0; --okbd:#bce8cd; --ngbg:#fdeaf0; --ngbd:#f5c2d3;
     --choicebg:#fff; --secbtn:#eceef2; --bar:#eceef2; --tagbg:#eef1f5;
   }
+  html[data-theme="light"]{ color-scheme: light }
+  /* color-scheme を宣言しないと、select のドロップダウンや入力欄の枠など
+     ブラウザが描く部分だけ明るいままになり、ダークモードで浮いて見える。 */
   html[data-theme="dark"]{
+    color-scheme: dark;
     --navy:#0e1620; --bg:#0f141b; --card:#1a2230;
     --line:#2b3545; --muted:#9aa6b5; --text:#e8ecf2;
     --ok:#34c77b; --ng:#ff5c86;
@@ -68,10 +72,13 @@
   .feedback.ok{background:var(--okbg); border:1px solid var(--okbd)}
   .feedback.ng{background:var(--ngbg); border:1px solid var(--ngbd)}
   .feedback h3{margin:0 0 6px; font-size:14px}
-  textarea,input[type=text]{
-    width:100%; font-family:inherit; font-size:15px; border:2px solid var(--line);
+  /* ログイン欄のemail/passwordや分野セレクトも同じ見た目にそろえる
+     （type=textだけを指定していた頃は、ここだけ素のブラウザ表示になっていた） */
+  textarea,input[type=text],input[type=email],input[type=password],select{
+    width:100%; font-family:inherit; font-size:16px; border:2px solid var(--line);
     border-radius:10px; padding:11px; resize:vertical; background:var(--choicebg); color:var(--text);
   }
+  select{padding:10px; resize:none}
   .row{display:flex; gap:8px}
   .row .btn{margin-top:0}
   nav{
@@ -177,6 +184,9 @@ function applyTheme(t){
   document.documentElement.setAttribute("data-theme", t);
   const btn = document.getElementById("themeBtn");
   if(btn) btn.textContent = (t === "dark") ? "☀️" : "🌙";
+  // ホーム画面から起動したときのステータスバー色もヘッダーに合わせる
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if(meta) meta.setAttribute("content", (t === "dark") ? "#0e1620" : "#232f3e");
 }
 function initTheme(){
   let t = localStorage.getItem(K_T);
@@ -221,7 +231,11 @@ const addDays = (dateStr, n) => {
   d.setDate(d.getDate() + n);
   return ymd(d);
 };
-const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// ' も変換する。用語名などを onclick='...' の中に埋めているため、
+// アポストロフィを含む文字列が来ると属性が途中で閉じて画面が壊れるのを防ぐ。
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// onclick 属性の中へ文字列リテラルとして埋め込む用（JSON化してからHTMLエスケープ）
+const jsArg = v => esc(JSON.stringify(v));
 
 function load(){
   try{ questions = JSON.parse(localStorage.getItem(K_Q)) || []; }catch(e){ questions = []; }
@@ -231,6 +245,41 @@ function load(){
 function saveProgress(){ localStorage.setItem(K_P, JSON.stringify(progress)); }
 function saveQuestions(){ localStorage.setItem(K_Q, JSON.stringify(questions)); }
 function saveTerms(){ localStorage.setItem(K_TERMS, JSON.stringify(terms)); }
+
+/* JSON（questions.json / バックアップ / 貼り付け）を1つの入口で取り込む。
+   起動時の自動取り込み・「最新を取り込む」・設定からの読み込みで同じ処理を使う。
+   問題はid、用語はtermをキーに上書きマージする（消しはしない）。
+   返り値: {q, t, p} 取り込んだ件数 */
+function mergeData(d){
+  if(!d || typeof d !== "object") throw new Error("JSONの形式が正しくありません");
+  const qarr = Array.isArray(d) ? d : (d.questions || []);
+  const tarr = Array.isArray(d.terms) ? d.terms : [];
+  const parr = (d.progress && typeof d.progress === "object") ? d.progress : null;
+
+  if(qarr.length){
+    const m = {}; questions.forEach(q => m[q.id] = q);
+    qarr.forEach(q => { if(q.id) m[q.id] = q; });
+    questions = Object.values(m); saveQuestions();
+  }
+  if(tarr.length){
+    const m = {}; terms.forEach(t => m[t.term] = t);
+    tarr.forEach(t => { if(t.term) m[t.term] = t; });
+    terms = Object.values(m); saveTerms();
+  }
+  // 学習記録つきのバックアップなら進捗も戻す。updatedAtが新しい方を残すので
+  // 「バックアップを読んだら今日の学習が巻き戻る」ことはない。
+  let pCount = 0;
+  if(parr){
+    Object.keys(parr).forEach(id => {
+      const inc = parr[id];
+      if(!inc || typeof inc !== "object") return;
+      const cur = progress[id];
+      if(!cur || (inc.updatedAt || "") > (cur.updatedAt || "")){ progress[id] = inc; pCount++; }
+    });
+    if(pCount) saveProgress();
+  }
+  return { q: qarr.length, t: tarr.length, p: pCount };
+}
 
 /* ===== クラウド同期（Supabase・任意ログイン） =====
    方針: ローカル(localStorage)が常に手元の正。ログイン中かつ電波がある時だけ、
@@ -425,7 +474,7 @@ function startSession(pool, label, limit){
     }
     return q;
   });
-  session = { queue: arr, idx:0, label, total:arr.length, done:0, correct:0, answered:false, retryLater:[] };
+  session = { queue: arr, idx:0, label, done:0, correct:0, answered:false };
   view = "quiz";
   render();
 }
@@ -489,16 +538,17 @@ function finishSession(){
 /* ===== 画面描画 ===== */
 function render(){
   syncNav();
+  $("#hdrSub").textContent = questions.length ? `全${questions.length}問` : "";
   if(questions.length === 0 && view !== "settings"){
     $("#app").innerHTML = emptyState();
     return;
   }
+  if(view === "quiz" && !session){ view = "home"; }   // セッションが無い状態でクイズ画面を描かない
   if(view === "home") renderHome();
   else if(view === "quiz") renderQuiz();
   else if(view === "zukan") renderZukan();
   else if(view === "stats") renderStats();
   else if(view === "settings") renderSettings();
-  $("#hdrSub").textContent = questions.length ? `全${questions.length}問` : "";
 }
 
 function emptyState(){
@@ -528,8 +578,7 @@ function renderHome(){
   const filterCard = `
     <div class="card">
       <label class="muted" for="secFilter" style="display:block;margin-bottom:6px">📂 分野でしぼる</label>
-      <select id="secFilter" onchange="setFilter(this.value)"
-        style="width:100%;padding:10px;border-radius:10px;font-size:16px">${opts}</select>
+      <select id="secFilter" onchange="setFilter(this.value)">${opts}</select>
       ${f?`<p class="hint" style="margin-top:6px">いまは絞り込み中。復習タイミング（忘却曲線）はそのまま、この分野の中だけ出ます。</p>`:""}
     </div>`;
 
@@ -688,10 +737,16 @@ function closeTerm(){ zukanTerm = null; render(); }
 function questionsByTerm(name){
   return questions.filter(q => (q.keywords||[]).some(k => k.includes(name) || name.includes(k)) || (q.question||"").includes(name));
 }
-function focusSearch(){ const el = document.getElementById("zukanSearch"); if(el){ const v = el.value; el.focus(); el.value=""; el.value=v; } }
+/* 検索の絞り込みは一覧部分だけ描き直す。
+   以前は1文字ごとに画面全体を作り直して入力欄にフォーカスを当て直していたため、
+   図鑑タブを開いただけでスマホのキーボードが勝手に開いてしまっていた。 */
+function filterZukan(v){
+  zukanQuery = v;
+  const el = document.getElementById("zukanList");
+  if(el) el.innerHTML = zukanListHtml();
+}
 
-function renderZukan(){
-  if(zukanTerm){ renderTermDetail(zukanTerm); return; }
+function zukanListHtml(){
   const q = zukanQuery.trim().toLowerCase();
   const cats = {};
   terms.forEach(t=>{
@@ -703,18 +758,23 @@ function renderZukan(){
     (cats[c] = cats[c] || []).push(t);
   });
   const catNames = Object.keys(cats);
-  let body = "";
   if(catNames.length === 0){
-    body = `<div class="card"><p class="hint">${terms.length ? "該当する用語がありません。" : "まだ用語がありません。問題データを読み込むと増えます。"}</p></div>`;
+    return `<div class="card"><p class="hint">${terms.length ? "該当する用語がありません。" : "まだ用語がありません。問題データを読み込むと増えます。"}</p></div>`;
   }
+  let body = "";
   catNames.forEach(c=>{
     body += `<div class="card"><h2>${esc(c)} <span class="hint">(${cats[c].length})</span></h2>`;
     cats[c].forEach(t=>{
-      body += `<div class="list-item" style="cursor:pointer" onclick='openTerm(${JSON.stringify(t.term)})'>
+      body += `<div class="list-item" style="cursor:pointer" onclick="openTerm(${jsArg(t.term)})">
         <b>${esc(t.term)}</b>${t.reading?` <span class="hint">${esc(t.reading)}</span>`:""}</div>`;
     });
     body += `</div>`;
   });
+  return body;
+}
+
+function renderZukan(){
+  if(zukanTerm){ renderTermDetail(zukanTerm); return; }
   const catCount = new Set(terms.map(t=>t.category||"その他")).size;
   $("#app").innerHTML = `
     <div class="card center">
@@ -722,9 +782,9 @@ function renderZukan(){
       <p class="big">${terms.length}<span style="font-size:18px"> 語</span></p>
       <p class="hint">カテゴリ ${catCount} ／ 教材を足すほど増えていきます</p>
       <input type="text" id="zukanSearch" placeholder="🔍 用語で検索" value="${esc(zukanQuery)}"
-        oninput="zukanQuery=this.value; renderZukan();">
-    </div>` + body;
-  focusSearch();
+        oninput="filterZukan(this.value)">
+    </div>
+    <div id="zukanList">${zukanListHtml()}</div>`;
 }
 
 function renderTermDetail(name){
@@ -732,7 +792,7 @@ function renderTermDetail(name){
   if(!t){ zukanTerm=null; renderZukan(); return; }
   const rel = questionsByTerm(name);
   const relLinks = (t.related||[]).filter(r=>terms.some(x=>x.term===r))
-    .map(r=>`<button class="tag" style="cursor:pointer;border:none" onclick='openTerm(${JSON.stringify(r)})'>${esc(r)} ›</button>`).join(" ");
+    .map(r=>`<button class="tag" style="cursor:pointer;border:none" onclick="openTerm(${jsArg(r)})">${esc(r)} ›</button>`).join(" ");
   $("#app").innerHTML = `
     <div class="quit-row"><button class="quit-btn" onclick="closeTerm()">← 図鑑にもどる</button></div>
     <div class="card">
@@ -742,7 +802,7 @@ function renderTermDetail(name){
       <p>${esc(t.definition||"")}</p>
       ${relLinks?`<p class="muted" style="margin:14px 0 6px">関連用語</p><div>${relLinks}</div>`:""}
       ${rel.length
-        ? `<button class="btn" style="margin-top:16px" onclick='startSession(questionsByTerm(${JSON.stringify(name)}),"用語: "+${JSON.stringify(t.term)})'>この用語の問題を解く（${rel.length}問）</button>`
+        ? `<button class="btn" style="margin-top:16px" onclick="startSession(questionsByTerm(${jsArg(name)}), '用語: ' + ${jsArg(t.term)})">この用語の問題を解く（${rel.length}問）</button>`
         : `<p class="hint" style="margin-top:16px">この用語に関する問題はまだありません。</p>`}
     </div>`;
 }
@@ -750,18 +810,21 @@ function renderTermDetail(name){
 /* 「最新を取り込む」: 同梱questions.jsonの最新を取り込み（localhostで有効）、ログイン中ならクラウドへ反映 */
 async function pullLatest(){
   setSyncStatus("取り込み中…");
+  let sourceUpdatedAt = "";
   try{
     const r = await fetch("questions.json", {cache:"no-store"});
-    if(r.ok){
-      const d = await r.json();
-      const qarr = d.questions || (Array.isArray(d)?d:[]);
-      const tarr = d.terms || [];
-      if(qarr.length){ const m={}; questions.forEach(q=>m[q.id]=q); qarr.forEach(q=>{ if(q.id) m[q.id]=q; }); questions=Object.values(m); saveQuestions(); }
-      if(tarr.length){ const m={}; terms.forEach(t=>m[t.term]=t); tarr.forEach(t=>{ if(t.term) m[t.term]=t; }); terms=Object.values(m); saveTerms(); }
-    }
-  }catch(e){}
+    if(!r.ok){ throw new Error("questions.json の取得に失敗（HTTP " + r.status + "）。localhost:4811でこのページを開いていますか？"); }
+    const d = await r.json();
+    sourceUpdatedAt = (d.meta && d.meta.updatedAt) || "";
+    mergeData(d);
+  }catch(e){
+    setSyncStatus("");
+    alert("取り込みエラー: " + (e.message || e));
+    return;
+  }
   if(cloudReady()){ await syncAll(); } else { setSyncStatus(""); render(); }
   alert("取り込み完了：問題 " + questions.length + " 問・用語 " + terms.length + " 語"
+    + (sourceUpdatedAt ? "\n教材データの更新日: " + sourceUpdatedAt : "")
     + (cloudReady() ? "\nクラウドにも同期しました。他の端末は「今すぐ同期」で反映されます。" : "\n（ログインすると他の端末にも同期されます）"));
 }
 
@@ -794,25 +857,26 @@ function renderSettings(){
       <p class="hint" id="syncStatus">${esc(syncStatus)}</p>
     </div>`;
   }
+  // 1回で組み立てて1回だけ差し込む（以前は += で二度組み立てていて、
+  // 追記のたびに画面全体のDOMが作り直されていた）
   $("#app").innerHTML = authCard + `
     <div class="card">
       <h2>1回の出題数</h2>
       <p class="muted">「今日の分」を何問ずつ出すか。通勤時間に合わせて選べます。</p>
       <div class="row" style="flex-wrap:wrap">${batchOpts}</div>
-    </div>`;
-  $("#app").innerHTML += `
+    </div>
     <div class="card">
       <h2>問題データの読み込み</h2>
-      <p class="muted">JSONファイルを選ぶか、内容を貼り付けて読み込みます。</p>
+      <p class="muted">JSONファイルを選ぶか、内容を貼り付けて読み込みます。バックアップしたファイルもここから戻せます。</p>
       <input type="file" id="fileInput" accept=".json,application/json" style="margin:8px 0">
       <textarea id="pasteInput" rows="4" placeholder="ここにJSONを貼り付けてもOK"></textarea>
       <button class="btn" onclick="importPasted()">貼り付けたJSONを読み込む</button>
-      <p class="hint">現在 ${questions.length} 問を保持中。</p>
+      <p class="hint">現在 問題${questions.length}問 / 用語${terms.length}語 を保持中。</p>
     </div>
     <div class="card">
       <h2>バックアップ</h2>
       <button class="btn secondary" onclick="exportProgress()">学習記録を書き出す（JSON）</button>
-      <p class="hint">機種変更や万一に備えて。問題データもまとめて出力します。</p>
+      <p class="hint">機種変更や万一に備えて。問題・用語・学習記録をまとめて出力し、上の「読み込み」からそのまま戻せます。</p>
     </div>
     <div class="card">
       <h2>リセット</h2>
@@ -836,26 +900,19 @@ function renderSettings(){
 function doImport(text){
   try{
     const data = JSON.parse(text);
-    const arr = Array.isArray(data) ? data : (data.questions || []);
-    if(!Array.isArray(arr) || arr.length===0) throw new Error("問題が見つかりません");
-    // 既存とマージ（idで上書き）
-    const map = {};
-    questions.forEach(q=>map[q.id]=q);
-    arr.forEach(q=>{ if(q.id) map[q.id]=q; });
-    questions = Object.values(map);
-    saveQuestions();
-    if(cloudReady()){ pushQuestions(arr); }   // ログイン中ならクラウドへ→他端末にも届く
-    // 用語（図鑑）も同梱されていれば取り込む
-    const tarr = Array.isArray(data.terms) ? data.terms : [];
-    if(tarr.length){
-      const tmap = {}; terms.forEach(t=>tmap[t.term]=t);
-      tarr.forEach(t=>{ if(t.term) tmap[t.term]=t; });
-      terms = Object.values(tmap); saveTerms();
-      if(cloudReady()){ pushTerms(tarr); }
+    const n = mergeData(data);   // 問題・用語・（バックアップなら）学習記録をまとめて取り込む
+    if(!n.q && !n.t && !n.p) throw new Error("問題・用語・学習記録のいずれも見つかりません");
+    if(cloudReady()){
+      if(n.q) pushQuestions(data.questions || (Array.isArray(data) ? data : []));
+      if(n.t) pushTerms(data.terms);
+      if(n.p) pushAllProgress();
     }
-    alert(`読み込み成功：${arr.length}問`
-      + (tarr.length ? `・用語${tarr.length}語` : "")
-      + `を追加/更新しました（合計 問題${questions.length} / 用語${terms.length}）。`
+    const parts = [];
+    if(n.q) parts.push(`問題${n.q}問`);
+    if(n.t) parts.push(`用語${n.t}語`);
+    if(n.p) parts.push(`学習記録${n.p}件`);
+    alert(`読み込み成功：${parts.join("・")}を追加/更新しました`
+      + `（合計 問題${questions.length} / 用語${terms.length}）。`
       + (cloudReady() ? "\nクラウドにも同期しました。" : ""));
     view="home"; render();
   }catch(err){
@@ -867,12 +924,17 @@ function importPasted(){
   if(!t){ alert("JSONを貼り付けてください。"); return; }
   doImport(t);
 }
+/* バックアップ書き出し。ここで出したファイルは、そのまま「問題データの読み込み」から
+   読み戻せる形（questions / terms / progress）にしておく。 */
 function exportProgress(){
-  const blob = new Blob([JSON.stringify({questions, progress, exportedAt:new Date().toISOString()}, null, 2)], {type:"application/json"});
+  const payload = { questions, terms, progress, exportedAt:new Date().toISOString() };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
+  a.href = url;
   a.download = `aws-quiz-backup-${todayStr()}.json`;
   a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
 async function resetProgress(){
   if(!confirm("学習記録（正答率・復習予定）を消します。問題データは残ります。よろしいですか？")) return;
@@ -934,10 +996,7 @@ render();
 // 同梱のquestions.jsonがあれば「常に最新」を取り込む（localhost等で有効・配信版は404で無視）。
 // 問題・用語をidでマージし、ログイン中ならクラウドへも反映（=新素材の取り込み口）。
 fetch("questions.json", {cache:"no-store"}).then(r=>r.ok?r.json():Promise.reject()).then(d=>{
-  const qarr = d.questions || (Array.isArray(d)?d:[]);
-  const tarr = d.terms || [];
-  if(qarr.length){ const m={}; questions.forEach(q=>m[q.id]=q); qarr.forEach(q=>{ if(q.id) m[q.id]=q; }); questions=Object.values(m); saveQuestions(); }
-  if(tarr.length){ const m={}; terms.forEach(t=>m[t.term]=t); tarr.forEach(t=>{ if(t.term) m[t.term]=t; }); terms=Object.values(m); saveTerms(); }
+  mergeData(d);
   render();
   if(cloudReady()) syncAll();   // ログイン済みなら取り込んだ最新をクラウドへ
 }).catch(()=>{});
