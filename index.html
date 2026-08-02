@@ -231,6 +231,19 @@ const addDays = (dateStr, n) => {
   d.setDate(d.getDate() + n);
   return ymd(d);
 };
+// updatedAt(ISO)から「今日/1日前/n日前」を出す。ISOがなければ日付部分だけの旧データにも対応。
+function daysAgoLabel(isoOrDate){
+  if(!isoOrDate) return "";
+  // ISO(UTC)文字列はローカル日付に変換してから比較する（UTCのままだとJSTで日付がずれるため）
+  const thenLocal = new Date(isoOrDate);
+  const then = new Date(thenLocal.getFullYear(), thenLocal.getMonth(), thenLocal.getDate());
+  const [ty,tm,td] = todayStr().split("-").map(Number);
+  const now = new Date(ty, tm-1, td);
+  const diff = Math.round((now - then) / 86400000);
+  if(diff <= 0) return "今日";
+  if(diff === 1) return "1日前";
+  return `${diff}日前`;
+}
 // ' も変換する。用語名などを onclick='...' の中に埋めているため、
 // アポストロフィを含む文字列が来ると属性が途中で閉じて画面が壊れるのを防ぐ。
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -442,6 +455,19 @@ function applySM2(id, quality){
   pushProgress(id);   // ログイン中なら裏でクラウドへ（オフライン時は無視）
 }
 
+// 学習ストリーク：今日 or 昨日を起点に、学習した日が連続何日続いているか
+function studyStreak(){
+  const days = new Set();
+  Object.values(progress).forEach(p=>{
+    if(p && p.updatedAt) days.add(ymd(new Date(p.updatedAt)));
+  });
+  let cursor = todayStr();
+  if(!days.has(cursor)) cursor = addDays(cursor, -1);   // 今日はまだやってなければ昨日から数える
+  let n = 0;
+  while(days.has(cursor)){ n++; cursor = addDays(cursor, -1); }
+  return n;
+}
+
 /* 今日の出題対象：期限切れ(due<=今日) または 未学習 */
 function dueQuestions(){
   const t = todayStr();
@@ -560,6 +586,8 @@ function emptyState(){
 }
 
 function renderHome(){
+  const streak = studyStreak();
+  const streakHtml = streak > 0 ? `<p class="hint center">🔥 ${streak}日連続で学習中</p>` : "";
   const f = getFilter();
   const due = applyFilter(dueQuestions());
   const allPool = applyFilter(questions);
@@ -590,12 +618,14 @@ function renderHome(){
       <p class="muted">今日やるべき問題${f?"（絞り込み中）":""}</p>
       <p class="big">${due.length}<span style="font-size:18px"> 問</span></p>
       <p class="hint">未学習 ${newCount} 問 ／ 復習 ${due.length-newCount} 問</p>
+      ${streakHtml}
       ${batchNote}
       <button class="btn" onclick='startSession(applyFilter(dueQuestions()),"今日の分",getBatch())'>▶ ${willDo}問 始める</button>
     </div>` : `
     <div class="card center">
       <p class="big" style="font-size:30px">今日の分は完了！🎉</p>
       <p class="hint">${doneMsg}</p>
+      ${streakHtml}
     </div>`;
   $("#app").innerHTML = filterCard + topCard + `
     <div class="card">
@@ -621,9 +651,20 @@ function renderQuiz(){
     <div class="card">
       <div class="progress-dots">${esc(session.label)} ・ ${num} / ${session.queue.length} 問</div>
       <div>${(q.section?`<span class="tag">${esc(q.section)}</span>`:"")}${q.type==="term"?'<span class="tag">記述</span>':''}</div>
+      ${renderHistoryBadge(q)}
       <h2 style="margin-top:8px">${esc(q.question)}</h2>
       ${body}
     </div>`;
+}
+
+// 出題前に「過去に出たか／いつ／正解だったか」を軽く表示する
+function renderHistoryBadge(q){
+  const p = progress[q.id];
+  if(!p || !p.seen) return "";
+  const when = daysAgoLabel(p.updatedAt);
+  const ok = p.lastQuality != null && p.lastQuality >= 3;
+  const resultLabel = ok ? "○正解" : "✕不正解";
+  return `<p class="hint" style="margin-top:4px">🔁 ${when ? when+"に" : ""}出題済み（前回${resultLabel}・通算 ◯${p.correctCount} ✕${p.wrongCount}）</p>`;
 }
 
 function renderChoice(q){
