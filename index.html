@@ -309,6 +309,7 @@ try{
 }catch(e){ supa = null; }
 let currentUser = null;
 let syncing = false;
+let syncAgain = false;   // 同期中に来た呼び出しを1回分だけ覚えておく（下の syncAll 参照）
 let syncStatus = "";
 function cloudReady(){ return !!(supa && currentUser); }
 function setSyncStatus(s){ syncStatus = s; const el = document.getElementById("syncStatus"); if(el) el.textContent = s; }
@@ -324,11 +325,12 @@ async function pushProgress(id){
   if(!cloudReady() || !progress[id]) return;
   try{ await supa.from("aws_progress").upsert(progToRow(id)); }catch(e){}
 }
-async function pushAllProgress(){
+async function pushProgressRows(ids){
   if(!cloudReady()) return;
-  const rows = Object.keys(progress).map(progToRow);
+  const rows = ids.filter(id => progress[id]).map(progToRow);
   if(rows.length){ const { error } = await supa.from("aws_progress").upsert(rows); if(error) throw error; }
 }
+async function pushAllProgress(){ await pushProgressRows(Object.keys(progress)); }
 async function pushQuestions(arr){
   if(!cloudReady()) return;
   const rows = arr.filter(q=>q.id).map(q=>({ user_id: currentUser.id, id: q.id,
@@ -338,22 +340,31 @@ async function pushQuestions(arr){
     keywords: q.keywords||null, updated_at: new Date().toISOString() }));
   if(rows.length){ const { error } = await supa.from("aws_questions").upsert(rows); if(error) throw error; }
 }
+/* 返り値: クラウドが持っているidの集合。syncAll がこれを使い、
+   「クラウドにまだ無い問題」だけを押し上げる（全件upsertを避けるため）。 */
 async function syncDownQuestions(){
-  if(!cloudReady()) return;
+  if(!cloudReady()) return null;
   const { data, error } = await supa.from("aws_questions").select("*");
   if(error) throw error;
-  if(!data || !data.length) return; // クラウドに無ければローカル維持
+  if(!data) return null;
+  const cloudIds = new Set(data.map(r=>r.id));
+  if(!data.length) return cloudIds; // クラウドに無ければローカル維持（空集合＝全件が押し上げ対象）
   const map = {}; questions.forEach(q=>map[q.id]=q);
   data.forEach(r=>{ map[r.id] = { id:r.id, domain:r.domain, section:r.section, type:r.type,
     question:r.question, choices:r.choices, answer:r.answer, explanation:r.explanation, keywords:r.keywords }; });
   questions = Object.values(map); saveQuestions();
+  return cloudIds;
 }
+/* 返り値: question_id -> クラウド側の updated_at。syncAll がこれを使い、
+   「クラウドより新しい／クラウドに無い」進捗だけを押し上げる。 */
 async function syncDownProgress(){
-  if(!cloudReady()) return;
+  if(!cloudReady()) return null;
   const { data, error } = await supa.from("aws_progress").select("*");
   if(error) throw error;
-  if(!data) return;
+  if(!data) return null;
+  const cloudAt = {};
   data.forEach(r=>{
+    cloudAt[r.question_id] = r.updated_at || "";
     const local = progress[r.question_id];
     const cloudT = r.updated_at || "";
     const localT = (local && local.updatedAt) || "";
@@ -364,6 +375,7 @@ async function syncDownProgress(){
     }
   });
   saveProgress();
+  return cloudAt;
 }
 async function pushTerms(arr){
   if(!cloudReady()) return;
@@ -372,30 +384,52 @@ async function pushTerms(arr){
     related: t.related||null, source: t.source||null, updated_at: new Date().toISOString() }));
   if(rows.length){ const { error } = await supa.from("aws_terms").upsert(rows); if(error) throw error; }
 }
+/* 返り値: クラウドが持っている用語名の集合（syncDownQuestions と同じ考え方）。 */
 async function syncDownTerms(){
-  if(!cloudReady()) return;
+  if(!cloudReady()) return null;
   const { data, error } = await supa.from("aws_terms").select("*");
   if(error) throw error;
-  if(!data || !data.length) return;
+  if(!data) return null;
+  const cloudTerms = new Set(data.map(r=>r.term));
+  if(!data.length) return cloudTerms;
   const map = {}; terms.forEach(t=>map[t.term]=t);
   data.forEach(r=>{ map[r.term] = { term:r.term, reading:r.reading, definition:r.definition,
     category:r.category, related:r.related||[], source:r.source }; });
   terms = Object.values(map); saveTerms();
+  return cloudTerms;
 }
+/* 押し上げるのは「クラウドにまだ無いもの」だけにする。
+   以前は毎回 questions/terms を全件 upsert し返していて、その大半は
+   直前に syncDown で受け取ったのと同じ内容の書き戻しだった（1回あたり約500KBの通信）。
+   クラウド側が勝つ方針は変えていないので、見える動きは同じ。
+   ※既存の問題文を「直す」のは npm run push（全件upsert）の役目で、ここは変わらない。 */
 async function syncAll(){
-  if(!cloudReady() || syncing) return;
+  if(!cloudReady()) return;
+  // 同期中に呼ばれたら、捨てずに「終わったらもう一度」を予約する。以前は黙って return して
+  // いたため、起動直後に questions.json を取り込んでも先行の同期に飲まれて押し上げられなかった。
+  if(syncing){ syncAgain = true; return; }
   if(navigator.onLine === false){ setSyncStatus("オフライン（電波がある時に同期します）"); return; }
   syncing = true; setSyncStatus("同期中…");
   try{
-    await syncDownQuestions();                            // 問題：クラウド→ローカル（増えた分を取得）
-    if(questions.length) await pushQuestions(questions);  // 問題：ローカル→クラウド（持っている端末から押し上げ）
-    await syncDownTerms();                                // 用語：クラウド→ローカル
-    if(terms.length) await pushTerms(terms);              // 用語：ローカル→クラウド
-    await syncDownProgress();                             // 進捗：新しい方を採用
-    await pushAllProgress();                              // 進捗：マージ後のローカルをクラウドへ
+    const cloudQIds = await syncDownQuestions();          // 問題：クラウド→ローカル（増えた分を取得）
+    const newQ = cloudQIds ? questions.filter(q=>q.id && !cloudQIds.has(q.id)) : [];
+    if(newQ.length) await pushQuestions(newQ);            // 問題：この端末にしか無い分だけ押し上げ
+
+    const cloudTerms = await syncDownTerms();             // 用語：クラウド→ローカル
+    const newT = cloudTerms ? terms.filter(t=>t.term && !cloudTerms.has(t.term)) : [];
+    if(newT.length) await pushTerms(newT);                // 用語：この端末にしか無い分だけ押し上げ
+
+    const cloudPAt = await syncDownProgress();            // 進捗：新しい方を採用
+    const staleP = cloudPAt ? Object.keys(progress).filter(id=>{
+      const cloudT = cloudPAt[id];
+      return cloudT === undefined || (progress[id].updatedAt || "") > cloudT;
+    }) : [];
+    if(staleP.length) await pushProgressRows(staleP);     // 進捗：クラウドより新しい分だけ押し上げ
+
     setSyncStatus("同期済み（問題 " + questions.length + " 問・用語 " + terms.length + " 語）");
   }catch(e){ setSyncStatus("同期エラー: " + (e.message || e.code || e)); }
   finally{ syncing = false; if(view==="settings"||view==="home"||view==="zukan") render(); }
+  if(syncAgain){ syncAgain = false; await syncAll(); }   // 同期中に来ていた分をここで拾う
 }
 
 /* 認証 */
@@ -536,6 +570,7 @@ function nextQuestion(){
   session.revealed = false;
   session.myAnswer = "";
   session.picked = null;
+  session.termGrade = null;
   if(session.idx >= session.queue.length){ finishSession(); return; }   // 設定した問数でちょうど終了
   renderQuiz();
 }
@@ -565,7 +600,9 @@ function finishSession(){
 function render(){
   syncNav();
   $("#hdrSub").textContent = questions.length ? `全${questions.length}問` : "";
-  if(questions.length === 0 && view !== "settings"){
+  // 問題が0でも、設定は開けるようにする。用語だけ入っている状態なら図鑑も見せる。
+  const canShow = questions.length > 0 || view === "settings" || (view === "zukan" && terms.length > 0);
+  if(!canShow){
     $("#app").innerHTML = emptyState();
     return;
   }
@@ -630,7 +667,7 @@ function renderHome(){
   $("#app").innerHTML = filterCard + topCard + `
     <div class="card">
       <h2>ほかの出題</h2>
-      <button class="btn secondary" onclick='startSession(applyFilter(questions.slice()),${f?'"この分野"':'"全問"'})'>${f?`この分野をランダム（${allPool.length}問）`:`全${questions.length}問をランダム`}</button>
+      <button class="btn secondary" onclick='startSession(applyFilter(questions),${f?'"この分野"':'"全問"'})'>${f?`この分野をランダム（${allPool.length}問）`:`全${questions.length}問をランダム`}</button>
       <button class="btn secondary" onclick='startSession(applyFilter(weakQuestions()),"苦手だけ")' ${weak.length?'':'disabled'}>苦手な問題だけ（${weak.length}問）</button>
     </div>
     <p class="hint center">電車の中でもオフラインで動きます。解いた結果は端末に保存されます。</p>
@@ -938,27 +975,38 @@ function renderSettings(){
 }
 
 /* ===== インポート / エクスポート ===== */
-function doImport(text){
+async function doImport(text){
+  let data, n;
   try{
-    const data = JSON.parse(text);
-    const n = mergeData(data);   // 問題・用語・（バックアップなら）学習記録をまとめて取り込む
+    data = JSON.parse(text);
+    n = mergeData(data);   // 問題・用語・（バックアップなら）学習記録をまとめて取り込む
     if(!n.q && !n.t && !n.p) throw new Error("問題・用語・学習記録のいずれも見つかりません");
-    if(cloudReady()){
-      if(n.q) pushQuestions(data.questions || (Array.isArray(data) ? data : []));
-      if(n.t) pushTerms(data.terms);
-      if(n.p) pushAllProgress();
-    }
-    const parts = [];
-    if(n.q) parts.push(`問題${n.q}問`);
-    if(n.t) parts.push(`用語${n.t}語`);
-    if(n.p) parts.push(`学習記録${n.p}件`);
-    alert(`読み込み成功：${parts.join("・")}を追加/更新しました`
-      + `（合計 問題${questions.length} / 用語${terms.length}）。`
-      + (cloudReady() ? "\nクラウドにも同期しました。" : ""));
-    view="home"; render();
   }catch(err){
     alert("読み込み失敗：" + err.message);
+    return;
   }
+  // ここまで来れば端末への取り込みは完了している。クラウドへの反映は必ず await して
+  // 成否をそのまま伝える（待たずにalertを出していた頃は、pushが失敗しても
+  // 画面には「クラウドにも同期しました」と表示されていた）。
+  let cloudMsg = "";
+  if(cloudReady()){
+    try{
+      if(n.q) await pushQuestions(data.questions || (Array.isArray(data) ? data : []));
+      if(n.t) await pushTerms(data.terms);
+      if(n.p) await pushAllProgress();
+      cloudMsg = "\nクラウドにも同期しました。";
+    }catch(e){
+      cloudMsg = "\n※クラウドへの同期に失敗しました（端末には保存済み）：" + (e.message || e.code || e)
+        + "\n電波のある場所で「今すぐ同期」を押してください。";
+    }
+  }
+  const parts = [];
+  if(n.q) parts.push(`問題${n.q}問`);
+  if(n.t) parts.push(`用語${n.t}語`);
+  if(n.p) parts.push(`学習記録${n.p}件`);
+  alert(`読み込み成功：${parts.join("・")}を追加/更新しました`
+    + `（合計 問題${questions.length} / 用語${terms.length}）。` + cloudMsg);
+  view="home"; render();
 }
 function importPasted(){
   const t = document.getElementById("pasteInput").value.trim();
