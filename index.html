@@ -132,6 +132,9 @@ const K_P = "awsq_progress_v1";      // 学習進捗（SM-2）
 const K_T = "awsq_theme_v1";         // テーマ（light / dark）
 const K_B = "awsq_batch_v1";         // 1回の出題数（0=全部）
 const K_F = "awsq_secfilter_v1";     // 分野しぼり込み（""=すべて）。UI設定なのでクラウド同期しない
+const K_L = "awsq_studylog_v1";      // 学習時間ログ（日付 -> 秒数）。端末内のみ（クラウド同期なし）
+const K_G = "awsq_studygoal_v1";     // 学習時間の目標（平日/週末の分数）
+const K_START = "awsq_studystart_v1"; // この機能を使い始めた日（これより前は繰越計算に含めない）
 
 /* ===== 1回の出題数（通勤で区切る） ===== */
 function getBatch(){
@@ -215,6 +218,7 @@ let questions = [];
 let terms = [];                    // 用語図鑑
 const K_TERMS = "awsq_terms_v1";
 let progress = {};   // id -> {ef, interval, due, reps, lapses, seen, correctCount, wrongCount, lastQuality}
+let studyLog = {};   // "YYYY-MM-DD" -> 秒数
 let view = "home";
 let session = null;  // 出題中セッション
 let zukanQuery = "";               // 図鑑の検索語
@@ -254,10 +258,88 @@ function load(){
   try{ questions = JSON.parse(localStorage.getItem(K_Q)) || []; }catch(e){ questions = []; }
   try{ terms = JSON.parse(localStorage.getItem(K_TERMS)) || []; }catch(e){ terms = []; }
   try{ progress = JSON.parse(localStorage.getItem(K_P)) || {}; }catch(e){ progress = {}; }
+  try{ studyLog = JSON.parse(localStorage.getItem(K_L)) || {}; }catch(e){ studyLog = {}; }
 }
 function saveProgress(){ localStorage.setItem(K_P, JSON.stringify(progress)); }
 function saveQuestions(){ localStorage.setItem(K_Q, JSON.stringify(questions)); }
 function saveTerms(){ localStorage.setItem(K_TERMS, JSON.stringify(terms)); }
+function saveLog(){ localStorage.setItem(K_L, JSON.stringify(studyLog)); }
+
+/* ===== 学習時間の目標（平日/週末、分） ===== */
+function getGoal(){
+  try{
+    const g = JSON.parse(localStorage.getItem(K_G));
+    if(g && typeof g === "object") return { weekday: g.weekday ?? 60, weekend: g.weekend ?? 0 };
+  }catch(e){}
+  return { weekday: 60, weekend: 0 };   // 既定: 平日60分、週末は目標なし
+}
+function setGoal(weekday, weekend){
+  localStorage.setItem(K_G, JSON.stringify({ weekday, weekend }));
+  render();
+}
+function isWeekend(dateStr){
+  const [y,m,d] = dateStr.split("-").map(Number);
+  const day = new Date(y, m-1, d).getDay();
+  return day === 0 || day === 6;
+}
+function baseGoalMinutes(dateStr){
+  const g = getGoal();
+  return isWeekend(dateStr) ? g.weekend : g.weekday;
+}
+function studyMinutes(dateStr){ return Math.round((studyLog[dateStr] || 0) / 60); }
+
+/* ===== 学習時間の計測 =====
+   クイズ操作の間隔を積算する。操作と操作の間が長く空いた場合（バックグラウンドに
+   回した／放置した）は1回あたり最大3分でキャップし、実際に画面を見ていない時間を
+   「勉強した」とカウントしないようにする。 */
+const ACTIVITY_CAP_MS = 3 * 60 * 1000;
+let activityTs = null;
+function trackActivity(){
+  if(!activityTs) return;
+  const now = Date.now();
+  const delta = Math.min(now - activityTs, ACTIVITY_CAP_MS);
+  if(delta > 0){
+    const d = todayStr();
+    studyLog[d] = (studyLog[d] || 0) + Math.round(delta / 1000);
+    saveLog();
+  }
+  activityTs = now;
+}
+function startActivity(){ activityTs = Date.now(); }
+function stopActivity(){ trackActivity(); activityTs = null; }
+document.addEventListener("visibilitychange", ()=>{
+  if(!session) return;   // クイズ中でなければ関係ない
+  if(document.hidden) stopActivity();     // 裏に回した瞬間までを計上し、以降は数えない
+  else startActivity();                    // 戻ってきた時点から再開（裏にいた時間は数えない）
+});
+
+/* この機能を使い始めた日を記録する。それより前の日は「未達成」として
+   繰越の借りに数えない（初回起動時にいきなり数十日分の借金がつくのを防ぐ）。 */
+function studyStartDate(){
+  let d = localStorage.getItem(K_START);
+  if(!d){ d = todayStr(); localStorage.setItem(K_START, d); }
+  return d;
+}
+
+/* 繰越の計算：直近30日分をさかのぼり、目標に届かなかった日の不足分を
+   「借り」として積み上げる。勉強した分（週末含む）は借りを減らす。
+   30日より前まで無限に借金を持ち越さないよう、遡る期間には上限を設けている。 */
+function carryDebtBefore(dateStr){
+  const start = studyStartDate();
+  let debt = 0;
+  for(let i = 30; i >= 1; i--){
+    const d = addDays(dateStr, -i);
+    if(d < start) continue;   // 機能を使い始める前の日は数えない
+    debt = Math.max(0, debt + baseGoalMinutes(d) - studyMinutes(d));
+  }
+  return debt;
+}
+function todayGoalWithCarry(){
+  const t = todayStr();
+  const base = baseGoalMinutes(t);
+  const carry = carryDebtBefore(t);
+  return { base, carry, total: base + carry };
+}
 
 /* JSON（questions.json / バックアップ / 貼り付け）を1つの入口で取り込む。
    起動時の自動取り込み・「最新を取り込む」・設定からの読み込みで同じ処理を使う。
@@ -536,12 +618,14 @@ function startSession(pool, label, limit){
   });
   session = { queue: arr, idx:0, label, done:0, correct:0, answered:false };
   view = "quiz";
+  startActivity();
   render();
 }
 
 function answerChoice(qi){
   const q = session.queue[session.idx];
   if(session.answered) return;
+  trackActivity();
   session.answered = true;
   session.picked = qi;
   const correct = qi === q.answer;
@@ -555,6 +639,7 @@ function answerChoice(qi){
 function gradeTerm(quality){ // 記述式：自己採点（◎=5, △=3, ✕=1）
   const q = session.queue[session.idx];
   if(session.answered) return;
+  trackActivity();
   session.answered = true;
   session.termGrade = quality;
   session.done++;
@@ -565,6 +650,7 @@ function gradeTerm(quality){ // 記述式：自己採点（◎=5, △=3, ✕=1�
 }
 
 function nextQuestion(){
+  trackActivity();
   session.idx++;
   session.answered = false;
   session.revealed = false;
@@ -576,12 +662,14 @@ function nextQuestion(){
 }
 
 function quitSession(){
+  stopActivity();
   // 途中でやめてもOK。各問の結果はすでに保存済み。
   if(session && session.done > 0){ finishSession(); }   // やった分の成績を表示
   else { session=null; view="home"; render(); }
 }
 
 function finishSession(){
+  stopActivity();
   const acc = session.done ? Math.round(session.correct / session.done * 100) : 0;
   const html = `
     <div class="card center">
@@ -625,6 +713,11 @@ function emptyState(){
 function renderHome(){
   const streak = studyStreak();
   const streakHtml = streak > 0 ? `<p class="hint center">🔥 ${streak}日連続で学習中</p>` : "";
+  const g = todayGoalWithCarry();
+  const todayMin = studyMinutes(todayStr());
+  const timeHtml = g.total > 0
+    ? `<p class="hint center">⏱ 今日 ${todayMin}分 / 目標${g.total}分${g.carry>0?`（繰越${g.carry}分含む）`:""}</p>`
+    : (todayMin>0 ? `<p class="hint center">⏱ 今日 ${todayMin}分</p>` : "");
   const f = getFilter();
   const due = applyFilter(dueQuestions());
   const allPool = applyFilter(questions);
@@ -656,6 +749,7 @@ function renderHome(){
       <p class="big">${due.length}<span style="font-size:18px"> 問</span></p>
       <p class="hint">未学習 ${newCount} 問 ／ 復習 ${due.length-newCount} 問</p>
       ${streakHtml}
+      ${timeHtml}
       ${batchNote}
       <button class="btn" onclick='startSession(applyFilter(dueQuestions()),"今日の分",getBatch())'>▶ ${willDo}問 始める</button>
     </div>` : `
@@ -663,6 +757,7 @@ function renderHome(){
       <p class="big" style="font-size:30px">今日の分は完了！🎉</p>
       <p class="hint">${doneMsg}</p>
       ${streakHtml}
+      ${timeHtml}
     </div>`;
   $("#app").innerHTML = filterCard + topCard + `
     <div class="card">
@@ -758,6 +853,7 @@ function renderTerm(q){
   }
 }
 function revealTerm(){
+  trackActivity();
   const el = document.getElementById("termInput");
   session.myAnswer = el ? el.value.trim() : "";
   session.revealed = true;   // 答えを表示（採点はまだ）
@@ -803,10 +899,53 @@ function renderStats(){
       <p class="big">${accAll}%</p>
       <p class="hint">学習済 ${seen}/${total}問 ・ 累計 ◯${cAll} ✕${wAll}</p>
     </div>
+    ${studyTimeHtml()}
     <div class="card"><h2>分野別の正答率</h2>${domHtml||'<p class="hint">データなし</p>'}</div>
     <div class="card"><h2>間違いが多い問題</h2>${weakHtml}</div>
     <div class="card"><h2>これからの復習予定</h2>${upHtml}</div>
   `;
+}
+
+/* ===== 学習時間ログ（成績タブに表示） ===== */
+function studyTimeHtml(){
+  const t = todayStr();
+  const goal = todayGoalWithCarry();
+  const todayMin = studyMinutes(t);
+  const todayPct = goal.total ? Math.min(100, Math.round(todayMin / goal.total * 100)) : (todayMin>0?100:0);
+  const carryNote = goal.carry > 0
+    ? `<p class="hint">内訳: 今日の目標${goal.base}分 ＋ 繰越${goal.carry}分（未消化分）</p>`
+    : (goal.base ? `<p class="hint">今日の目標: ${goal.base}分</p>` : `<p class="hint">今日は目標なしの日です</p>`);
+
+  // 直近7日（今日を含む）
+  const days = [];
+  for(let i=6; i>=0; i--) days.push(addDays(t, -i));
+  const weekTotal = days.reduce((s,d)=>s+studyMinutes(d), 0);
+  const weekGoal = days.reduce((s,d)=>s+(d>=studyStartDate()?baseGoalMinutes(d):0), 0);
+  const wLabel = ["日","月","火","水","木","金","土"];
+  const start = studyStartDate();
+  const dayRows = days.map(d=>{
+    const m = studyMinutes(d);
+    const g = (d >= start) ? baseGoalMinutes(d) : 0;   // 記録を始める前の日は目標判定の対象外
+    const [dy,dm,dd] = d.split("-").map(Number);
+    const dow = new Date(dy, dm-1, dd).getDay();
+    const label = (d===t?"今日":`${dm}/${dd}`) + `(${wLabel[dow]})`;
+    let mark = "";
+    if(g > 0) mark = m >= g ? '<span style="color:var(--ok)">✓達成</span>' : '<span style="color:var(--ng)">未達</span>';
+    else if(d < start) mark = '<span class="hint">記録開始前</span>';
+    else mark = m > 0 ? '<span class="hint">目標外だけど学習</span>' : '<span class="hint">目標なし</span>';
+    return `<div class="stat-line"><span>${label}</span><span>${m}分${g>0?' / 目標'+g+'分':''} ${mark}</span></div>`;
+  }).join("");
+
+  return `
+    <div class="card">
+      <h2>⏱ 学習時間</h2>
+      <p class="muted">今日</p>
+      <p class="big" style="font-size:30px">${todayMin}<span style="font-size:16px">分</span></p>
+      <div class="bar"><i style="width:${todayPct}%"></i></div>
+      ${carryNote}
+      <p class="stat-line" style="margin-top:14px"><span>直近7日間の合計</span><span>${weekTotal}分 ${weekGoal?`/ 目標${weekGoal}分`:""}</span></p>
+      <div style="margin-top:6px">${dayRows}</div>
+    </div>`;
 }
 
 /* ===== 図鑑（用語） ===== */
@@ -937,7 +1076,22 @@ function renderSettings(){
   }
   // 1回で組み立てて1回だけ差し込む（以前は += で二度組み立てていて、
   // 追記のたびに画面全体のDOMが作り直されていた）
+  const goal = getGoal();
+  const wdOpts = [30,45,60,90,120].map(v=>
+    `<button class="btn ${goal.weekday===v?'':'secondary'}" style="flex:1;min-width:60px" onclick="setGoal(${v}, ${goal.weekend})">${v}分</button>`
+  ).join("");
+  const weOpts = [0,30,60].map(v=>
+    `<button class="btn ${goal.weekend===v?'':'secondary'}" style="flex:1;min-width:60px" onclick="setGoal(${goal.weekday}, ${v})">${v===0?"目標なし":v+"分"}</button>`
+  ).join("");
   $("#app").innerHTML = authCard + `
+    <div class="card">
+      <h2>⏱ 学習時間の目標</h2>
+      <p class="muted">平日1日あたりの目標時間。未達成の日があれば、翌日以降に不足分を繰り越して「成績」タブに表示します。</p>
+      <div class="row" style="flex-wrap:wrap">${wdOpts}</div>
+      <p class="muted" style="margin-top:12px">週末（土日）の目標</p>
+      <div class="row" style="flex-wrap:wrap">${weOpts}</div>
+      <p class="hint" style="margin-top:8px">学習時間はクイズを解いている間の操作間隔から自動計測します（放置・裏で開いたままの時間はカウントされません）。この記録は端末内のみに保存され、クラウド同期はされません。</p>
+    </div>
     <div class="card">
       <h2>1回の出題数</h2>
       <p class="muted">「今日の分」を何問ずつ出すか。通勤時間に合わせて選べます。</p>
@@ -1033,8 +1187,8 @@ async function resetProgress(){
 }
 async function resetAll(){
   if(!confirm("問題データも学習記録も全部消します。元に戻せません。よろしいですか？")) return;
-  localStorage.removeItem(K_Q); localStorage.removeItem(K_P); localStorage.removeItem(K_TERMS);
-  questions=[]; progress={}; terms=[];
+  localStorage.removeItem(K_Q); localStorage.removeItem(K_P); localStorage.removeItem(K_TERMS); localStorage.removeItem(K_L);
+  questions=[]; progress={}; terms=[]; studyLog={};
   if(cloudReady()){
     try{ await supa.from("aws_progress").delete().eq("user_id", currentUser.id); }catch(e){}
     try{ await supa.from("aws_questions").delete().eq("user_id", currentUser.id); }catch(e){}
