@@ -152,6 +152,15 @@ function setFilter(k){
   if(k) localStorage.setItem(K_F, k); else localStorage.removeItem(K_F);
   render();
 }
+/* 「成績」タブの分野別正答率から1タップでその分野の復習を始める。
+   ホームに戻って絞り込みを選び直す手間を省く（絞り込みも合わせて設定するので、
+   途中でやめてホームに戻っても同じ分野に絞られたままになる）。 */
+function reviewDomain(dom){
+  localStorage.setItem(K_F, "dom:" + dom);
+  const due = applyFilter(dueQuestions());
+  const pool = due.length ? due : applyFilter(questions);
+  startSession(pool, "復習: " + dom, getBatch());
+}
 function secKey(q){
   const s = (q.section || "").trim();
   let m = s.match(/^(\d+-\d+)/);          if(m) return m[1];        // 例: 7-3
@@ -961,7 +970,8 @@ function renderStats(){
     qs.forEach(q=>{const p=progress[q.id]; if(p){c+=p.correctCount;w+=p.wrongCount;}});
     const acc=(c+w)?Math.round(c/(c+w)*100):0;
     domHtml += `<div class="stat-line"><span>${esc(dom)}</span><span>${(c+w)?acc+'%':'未'} <span class="hint">(${qs.length}問)</span></span></div>
-      <div class="bar"><i style="width:${acc}%"></i></div>`;
+      <div class="bar"><i style="width:${acc}%"></i></div>
+      <button class="btn secondary" style="margin-top:6px;padding:8px" onclick="reviewDomain(${jsArg(dom)})">▶ この分野を復習する</button>`;
   });
 
   // 間違い多い順
