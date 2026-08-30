@@ -179,9 +179,13 @@ function sectionGroups(){   // [{key, label, n}] をキー順で返す
     return { key:g.key, label:prefix+topics, n:g.n };
   }).sort((a,b)=>a.key.localeCompare(b.key, "ja", {numeric:true}));
 }
+/* フィルター値は2種類：試験の4分野は "dom:分野名"、章・トピックはそのままの secKey。
+   「成績」タブで見ている正答率（分野別）と同じ単位でも絞り込めるようにするため。 */
 function applyFilter(arr){
   const f = getFilter();
-  return f ? arr.filter(q=>secKey(q)===f) : arr;
+  if(!f) return arr;
+  if(f.startsWith("dom:")) return arr.filter(q=>q.domain===f.slice(4));
+  return arr.filter(q=>secKey(q)===f);
 }
 
 /* ===== テーマ（ダークモード） ===== */
@@ -805,10 +809,15 @@ function renderHome(){
     ? `<p class="hint">今回はこの中から ${willDo} 問（残りは次回）</p>` : "";
 
   // 分野しぼり込みセレクタ（SM-2はそのまま、母集団を絞るだけ）
+  // 「成績」タブの正答率と同じ単位（試験の4分野）でも絞れるよう、章・トピックの上にまとめて出す。
+  const domainOpts = DOMAINS.filter(d=>questions.some(q=>q.domain===d)).map(d=>{
+    const n = questions.filter(q=>q.domain===d).length;
+    return `<option value="dom:${esc(d)}" ${f===("dom:"+d)?"selected":""}>${esc(d)}（${n}問）</option>`;
+  }).join("");
   const groups = sectionGroups();
-  const opts = [`<option value="">すべて（全${questions.length}問）</option>`]
-    .concat(groups.map(g=>`<option value="${esc(g.key)}" ${g.key===f?"selected":""}>${esc(g.label)}（${g.n}問）</option>`))
-    .join("");
+  const opts = `<option value="">すべて（全${questions.length}問）</option>`
+    + `<optgroup label="試験の4分野（成績タブと同じ単位）">${domainOpts}</optgroup>`
+    + `<optgroup label="章・トピック">${groups.map(g=>`<option value="${esc(g.key)}" ${g.key===f?"selected":""}>${esc(g.label)}（${g.n}問）</option>`).join("")}</optgroup>`;
   const filterCard = `
     <div class="card">
       <label class="muted" for="secFilter" style="display:block;margin-bottom:6px">📂 分野でしぼる</label>
