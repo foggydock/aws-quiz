@@ -136,6 +136,7 @@ const K_L = "awsq_studylog_v1";      // 学習時間ログ（日付 -> 秒数）
 const K_G = "awsq_studygoal_v1";     // 学習時間の目標（平日/週末の分数）
 const K_START = "awsq_studystart_v1"; // この機能を使い始めた日（これより前は繰越計算に含めない）
 const K_TUTOR = "awsq_tutor_v1";      // 先生役の最新コメント（キャッシュ）。端末内のみ
+const K_EXAM = "awsq_examdate_v1";    // 目標受験日（YYYY-MM-DD）。先生役への逆算材料にする
 
 /* ===== 1回の出題数（通勤で区切る） ===== */
 function getBatch(){
@@ -340,6 +341,22 @@ function todayGoalWithCarry(){
   const base = baseGoalMinutes(t);
   const carry = carryDebtBefore(t);
   return { base, carry, total: base + carry };
+}
+
+/* ===== 目標受験日 ===== */
+function getExamDate(){ return localStorage.getItem(K_EXAM) || ""; }
+function setExamDate(d){
+  if(d) localStorage.setItem(K_EXAM, d); else localStorage.removeItem(K_EXAM);
+  render();
+}
+function daysUntilExam(){
+  const d = getExamDate();
+  if(!d) return null;
+  const [y,m,dd] = d.split("-").map(Number);
+  const exam = new Date(y, m-1, dd);
+  const [ty,tm,td] = todayStr().split("-").map(Number);
+  const now = new Date(ty, tm-1, td);
+  return Math.round((exam - now) / 86400000);
 }
 
 /* JSON（questions.json / バックアップ / 貼り付け）を1つの入口で取り込む。
@@ -550,6 +567,8 @@ function buildTutorStats(){
     carryOverMinutes: g.carry,
     last7DaysStudyMinutesTotal: weekTotalMin,
     weakestQuestionsCount: weakQuestions().length,
+    examDate: getExamDate() || null,
+    daysUntilExam: daysUntilExam(),
   };
 }
 async function askTutor(){
@@ -1015,6 +1034,10 @@ function tutorHtml(){
   } else if(tutorState.error){
     body = `<p class="hint" style="color:var(--ng)">${esc(tutorState.error)}</p>`;
   }
+  const examDays = daysUntilExam();
+  const examHtml = (examDays !== null && examDays >= 0)
+    ? `<p class="hint">🎯 試験まであと${examDays}日</p>`
+    : (getExamDate() ? "" : `<p class="hint">「設定」で目標受験日を入れると、残り日数も踏まえたコメントになります。</p>`);
   const cachedHtml = cached
     ? `<div class="feedback" style="margin-top:10px"><div>${esc(cached.comment)}</div></div>
        <p class="hint" style="margin-top:4px">${daysAgoLabel(cached.at) || "たった今"}のコメント</p>`
@@ -1022,6 +1045,7 @@ function tutorHtml(){
   return `
     <div class="card">
       <h2>🧑‍🏫 先生に聞く</h2>
+      ${examHtml}
       ${cachedHtml}
       ${body}
       <button class="btn" onclick="askTutor()" ${tutorState.loading?"disabled":""}>${btnLabel}</button>
@@ -1163,7 +1187,17 @@ function renderSettings(){
   const weOpts = [0,30,60].map(v=>
     `<button class="btn ${goal.weekend===v?'':'secondary'}" style="flex:1;min-width:60px" onclick="setGoal(${goal.weekday}, ${v})">${v===0?"目標なし":v+"分"}</button>`
   ).join("");
+  const examDate = getExamDate();
+  const examDays = daysUntilExam();
+  const examHint = examDate
+    ? (examDays >= 0 ? `<p class="hint">試験まであと <b>${examDays}</b> 日</p>` : `<p class="hint">設定した日を過ぎています。受験後なら消してOKです。</p>`)
+    : `<p class="hint">設定すると、「先生に聞く」が残り日数を踏まえたコメントをしてくれます。</p>`;
   $("#app").innerHTML = authCard + `
+    <div class="card">
+      <h2>🎯 目標受験日</h2>
+      <input type="date" id="examDateInput" value="${esc(examDate)}" onchange="setExamDate(this.value)">
+      ${examHint}
+    </div>
     <div class="card">
       <h2>⏱ 学習時間の目標</h2>
       <p class="muted">平日1日あたりの目標時間。未達成の日があれば、翌日以降に不足分を繰り越して「成績」タブに表示します。</p>
