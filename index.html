@@ -415,7 +415,19 @@ function mergeData(d){
     });
     if(pCount) saveProgress();
   }
-  return { q: qarr.length, t: tarr.length, p: pCount };
+  // 学習時間ログ（日付→秒数）。日付ごとにタイムスタンプが無いため、新旧判定はできない。
+  // 大きい方を残せば「同じバックアップを2回読み込んでも増え続けない」かつ
+  // 「バックアップを読んだら今日の記録が減る」ことも起きない。
+  let lCount = 0;
+  const larr = (d.studyLog && typeof d.studyLog === "object") ? d.studyLog : null;
+  if(larr){
+    Object.keys(larr).forEach(date => {
+      const inc = Number(larr[date]) || 0;
+      if(inc > (studyLog[date] || 0)){ studyLog[date] = inc; lCount++; }
+    });
+    if(lCount) saveLog();
+  }
+  return { q: qarr.length, t: tarr.length, p: pCount, l: lCount };
 }
 
 /* ===== クラウド同期（Supabase・任意ログイン） =====
@@ -1298,7 +1310,7 @@ function renderSettings(){
     <div class="card">
       <h2>バックアップ</h2>
       <button class="btn secondary" onclick="exportProgress()">学習記録を書き出す（JSON）</button>
-      <p class="hint">機種変更や万一に備えて。問題・用語・学習記録をまとめて出力し、上の「読み込み」からそのまま戻せます。</p>
+      <p class="hint">機種変更や万一に備えて。問題・用語・学習記録・学習時間（手動追加分を含む）をまとめて出力し、上の「読み込み」からそのまま戻せます。</p>
     </div>
     <div class="card">
       <h2>リセット</h2>
@@ -1349,8 +1361,8 @@ async function doImport(text){
   let data, n;
   try{
     data = JSON.parse(text);
-    n = mergeData(data);   // 問題・用語・（バックアップなら）学習記録をまとめて取り込む
-    if(!n.q && !n.t && !n.p) throw new Error("問題・用語・学習記録のいずれも見つかりません");
+    n = mergeData(data);   // 問題・用語・（バックアップなら）学習記録・学習時間をまとめて取り込む
+    if(!n.q && !n.t && !n.p && !n.l) throw new Error("問題・用語・学習記録のいずれも見つかりません");
   }catch(err){
     alert("読み込み失敗：" + err.message);
     return;
@@ -1374,6 +1386,7 @@ async function doImport(text){
   if(n.q) parts.push(`問題${n.q}問`);
   if(n.t) parts.push(`用語${n.t}語`);
   if(n.p) parts.push(`学習記録${n.p}件`);
+  if(n.l) parts.push(`学習時間${n.l}日分`);
   alert(`読み込み成功：${parts.join("・")}を追加/更新しました`
     + `（合計 問題${questions.length} / 用語${terms.length}）。` + cloudMsg);
   view="home"; render();
@@ -1386,7 +1399,7 @@ function importPasted(){
 /* バックアップ書き出し。ここで出したファイルは、そのまま「問題データの読み込み」から
    読み戻せる形（questions / terms / progress）にしておく。 */
 function exportProgress(){
-  const payload = { questions, terms, progress, exportedAt:new Date().toISOString() };
+  const payload = { questions, terms, progress, studyLog, exportedAt:new Date().toISOString() };
   const blob = new Blob([JSON.stringify(payload, null, 2)], {type:"application/json"});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
