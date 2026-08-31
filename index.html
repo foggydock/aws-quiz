@@ -303,6 +303,17 @@ function baseGoalMinutes(dateStr){
 }
 function studyMinutes(dateStr){ return Math.round((studyLog[dateStr] || 0) / 60); }
 
+/* アプリの外（教科書写真・Geminiの解説を読む等）で学習した時間を、あとから自己申告で追加する。
+   アプリ内操作からの自動計測（trackActivity）とは別枠だが、同じ studyLog に足し込むだけなので
+   「今日の分／目標」「成績」タブの表示にはそのまま合算されて出る。マイナスにはしない。 */
+function addStudyMinutes(dateStr, minutes){
+  const d = dateStr || todayStr();
+  const m = parseInt(minutes, 10);
+  if(!m || isNaN(m)) return;
+  studyLog[d] = Math.max(0, (studyLog[d] || 0) + m * 60);
+  saveLog();
+}
+
 /* ===== 学習時間の計測 =====
    クイズ操作の間隔を積算する。操作と操作の間が長く空いた場合（バックグラウンドに
    回した／放置した）は1回あたり最大3分でキャップし、実際に画面を見ていない時間を
@@ -705,7 +716,7 @@ function startSession(pool, label, limit){
     }
     return q;
   });
-  session = { queue: arr, idx:0, label, done:0, correct:0, answered:false };
+  session = { queue: arr, idx:0, label, done:0, correct:0, answered:false, results:[] };
   view = "quiz";
   startActivity();
   render();
@@ -721,6 +732,8 @@ function answerChoice(qi){
   if(correct) session.correct++;
   session.done++;
   applySM2(q.id, correct ? 5 : 2);
+  session.results.push({ id:q.id, question:q.question, type:"choice", correct,
+    choiceText:q.choices[qi], correctText:q.choices[q.answer], explanation:q.explanation||"" });
   // 間違えてもこのセッションでは繰り返さない（忘却曲線で翌日また出る）
   renderQuiz();
 }
@@ -732,8 +745,11 @@ function gradeTerm(quality){ // 記述式：自己採点（◎=5, △=3, ✕=1�
   session.answered = true;
   session.termGrade = quality;
   session.done++;
-  if(quality >= 4) session.correct++;
+  const correct = quality >= 4;
+  if(correct) session.correct++;
   applySM2(q.id, quality);
+  session.results.push({ id:q.id, question:q.question, type:"term", correct,
+    myAnswer:session.myAnswer||"", modelAnswer:q.answer, explanation:q.explanation||"", grade:quality });
   // 自己採点が低くてもこのセッションでは繰り返さない（忘却曲線で翌日また出る）
   renderQuiz();
 }
@@ -757,16 +773,44 @@ function quitSession(){
   else { session=null; view="home"; render(); }
 }
 
+// セッション終了後、間違えた問題だけを集めてもう一度解く（元の問題データを取り直し、選択肢は再シャッフルされる）
+function reviewWrongFromSession(ids){
+  const pool = ids.map(id=>questions.find(q=>q.id===id)).filter(Boolean);
+  startSession(pool, "振り返り: 間違えた問題", 0);
+}
 function finishSession(){
   stopActivity();
   const acc = session.done ? Math.round(session.correct / session.done * 100) : 0;
+  const results = session.results;
+  const wrongIds = results.filter(r=>!r.correct).map(r=>r.id);
+  // 各問1行。間違えた問題だけ、自分の回答と正解・解説を展開して出す（見返す＝振り返り、が目的なので正解した問題は畳んだまま）
+  const listHtml = results.map(r=>{
+    const mark = r.correct ? '<span style="color:var(--ok);font-weight:800">◯</span>' : '<span style="color:var(--ng);font-weight:800">✕</span>';
+    const detail = !r.correct
+      ? `<p class="hint" style="margin-top:4px">
+          ${r.type==="choice"
+            ? `あなたの回答: ${esc(r.choiceText)}<br>正解: ${esc(r.correctText)}`
+            : `あなたの回答: ${esc(r.myAnswer||"（空欄）")}<br>模範解答: ${esc(r.modelAnswer)}`}
+          ${r.explanation?`<br>${esc(r.explanation)}`:""}
+        </p>`
+      : "";
+    return `<div class="list-item">${mark} ${esc(r.question)}${detail}</div>`;
+  }).join("");
+  const reviewBtn = wrongIds.length
+    ? `<button class="btn" onclick='reviewWrongFromSession(${jsArg(wrongIds)})'>✕だった${wrongIds.length}問をもう一度解く</button>`
+    : "";
   const html = `
     <div class="card center">
       <h2>おつかれさまでした 🎉</h2>
       <p class="big">${acc}%</p>
       <p class="muted">${session.correct} / ${session.done} 問正解</p>
       <p class="hint">間違えた問題は忘却曲線に沿って近いうちにまた出ます。</p>
-      <button class="btn" onclick="view='home';session=null;render()">ホームに戻る</button>
+      ${reviewBtn}
+      <button class="btn secondary" onclick="view='home';session=null;render()">ホームに戻る</button>
+    </div>
+    <div class="card">
+      <h2>今回の振り返り</h2>
+      ${listHtml}
     </div>`;
   session = null; view="home";
   $("#app").innerHTML = html;
@@ -1226,6 +1270,19 @@ function renderSettings(){
       <p class="hint" style="margin-top:8px">学習時間はクイズを解いている間の操作間隔から自動計測します（放置・裏で開いたままの時間はカウントされません）。この記録は端末内のみに保存され、クラウド同期はされません。</p>
     </div>
     <div class="card">
+      <h2>📝 学習時間を手動で追加</h2>
+      <p class="muted">教科書の写真を見たり、Geminiの解説を読んだりした時間など、このアプリを操作していない学習時間もここから追加できます。</p>
+      <input type="date" id="manualStudyDate" value="${todayStr()}" max="${todayStr()}">
+      <div class="row" style="flex-wrap:wrap;margin-top:8px">
+        ${[5,10,15,20,30,45,60].map(m=>`<button class="btn secondary" style="flex:1;min-width:52px" onclick="quickAddStudy(${m})">+${m}分</button>`).join("")}
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" inputmode="numeric" id="manualStudyMinutes" placeholder="分数を入力（例: 25）">
+        <button class="btn" style="width:auto;flex:0 0 auto;padding:11px 18px" onclick="submitManualStudy()">追加</button>
+      </div>
+      <p class="hint" id="manualStudyHint" style="margin-top:6px"></p>
+    </div>
+    <div class="card">
       <h2>1回の出題数</h2>
       <p class="muted">「今日の分」を何問ずつ出すか。通勤時間に合わせて選べます。</p>
       <div class="row" style="flex-wrap:wrap">${batchOpts}</div>
@@ -1259,6 +1316,32 @@ function renderSettings(){
     r.onload = ()=> doImport(r.result);
     r.readAsText(f);
   });
+  document.getElementById("manualStudyDate").addEventListener("input", updateManualStudyHint);
+  updateManualStudyHint();
+}
+
+/* 選んだ日の現在の合計だけを更新する（画面全体をrenderし直すと日付欄からフォーカスが外れるため） */
+function updateManualStudyHint(){
+  const el = document.getElementById("manualStudyDate");
+  const hint = document.getElementById("manualStudyHint");
+  if(!el || !hint) return;
+  const d = el.value || todayStr();
+  hint.textContent = `この日の現在の学習時間: ${studyMinutes(d)}分`;
+}
+function quickAddStudy(minutes){
+  const el = document.getElementById("manualStudyDate");
+  addStudyMinutes(el ? el.value : todayStr(), minutes);
+  updateManualStudyHint();
+}
+function submitManualStudy(){
+  const dateEl = document.getElementById("manualStudyDate");
+  const minEl = document.getElementById("manualStudyMinutes");
+  const before = studyMinutes(dateEl.value || todayStr());
+  addStudyMinutes(dateEl.value, minEl.value);
+  const after = studyMinutes(dateEl.value || todayStr());
+  if(after === before){ alert("分数を入力してください（数字）。"); return; }
+  minEl.value = "";
+  updateManualStudyHint();
 }
 
 /* ===== インポート / エクスポート ===== */
