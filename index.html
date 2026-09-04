@@ -133,8 +133,7 @@ const K_T = "awsq_theme_v1";         // テーマ（light / dark）
 const K_B = "awsq_batch_v1";         // 1回の出題数（0=全部）
 const K_F = "awsq_secfilter_v1";     // 分野しぼり込み（""=すべて）。UI設定なのでクラウド同期しない
 const K_L = "awsq_studylog_v1";      // 学習時間ログ（日付 -> 秒数）。端末内のみ（クラウド同期なし）
-const K_G = "awsq_studygoal_v1";     // 学習時間の目標（平日/週末の分数）
-const K_START = "awsq_studystart_v1"; // この機能を使い始めた日（これより前は繰越計算に含めない）
+const K_START = "awsq_studystart_v1"; // この機能を使い始めた日（これより前は平均の集計に含めない）
 const K_TUTOR = "awsq_tutor_v1";      // 先生役の最新コメント（キャッシュ）。端末内のみ
 const K_EXAM = "awsq_examdate_v1";    // 目標受験日（YYYY-MM-DD）。先生役への逆算材料にする
 
@@ -280,28 +279,29 @@ function saveQuestions(){ localStorage.setItem(K_Q, JSON.stringify(questions)); 
 function saveTerms(){ localStorage.setItem(K_TERMS, JSON.stringify(terms)); }
 function saveLog(){ localStorage.setItem(K_L, JSON.stringify(studyLog)); }
 
-/* ===== 学習時間の目標（平日/週末、分） ===== */
-function getGoal(){
-  try{
-    const g = JSON.parse(localStorage.getItem(K_G));
-    if(g && typeof g === "object") return { weekday: g.weekday ?? 60, weekend: g.weekend ?? 0 };
-  }catch(e){}
-  return { weekday: 60, weekend: 0 };   // 既定: 平日60分、週末は目標なし
-}
-function setGoal(weekday, weekend){
-  localStorage.setItem(K_G, JSON.stringify({ weekday, weekend }));
-  render();
-}
+/* ===== 学習時間の目標（平日/週末、分） =====
+   固定値ではなく、学習を始めた日から今日の前日までに実際に学習した日
+   （0分の日＝お休みの日は除く）の平均分数を、平日・週末それぞれで算出して
+   「今日の目標」にする。頑張った日が増えるほど目標も自然に上がっていく。
+   繰越（借金）はしない：今日は今日の分だけを見る。 */
 function isWeekend(dateStr){
   const [y,m,d] = dateStr.split("-").map(Number);
   const day = new Date(y, m-1, d).getDay();
   return day === 0 || day === 6;
 }
-function baseGoalMinutes(dateStr){
-  const g = getGoal();
-  return isWeekend(dateStr) ? g.weekend : g.weekday;
-}
 function studyMinutes(dateStr){ return Math.round((studyLog[dateStr] || 0) / 60); }
+function avgStudyMinutes(weekend){
+  const start = studyStartDate();
+  const t = todayStr();
+  let sum = 0, n = 0;
+  for(let d = start; d < t; d = addDays(d, 1)){
+    if(isWeekend(d) !== weekend) continue;
+    const m = studyMinutes(d);
+    if(m > 0){ sum += m; n++; }
+  }
+  return n ? Math.round(sum / n) : 0;
+}
+function todayGoalMinutes(){ return avgStudyMinutes(isWeekend(todayStr())); }
 
 /* アプリの外（教科書写真・Geminiの解説を読む等）で学習した時間を、あとから自己申告で追加する。
    アプリ内操作からの自動計測（trackActivity）とは別枠だが、同じ studyLog に足し込むだけなので
@@ -339,32 +339,12 @@ document.addEventListener("visibilitychange", ()=>{
   else startActivity();                    // 戻ってきた時点から再開（裏にいた時間は数えない）
 });
 
-/* この機能を使い始めた日を記録する。それより前の日は「未達成」として
-   繰越の借りに数えない（初回起動時にいきなり数十日分の借金がつくのを防ぐ）。 */
+/* この機能を使い始めた日を記録する。それより前の日は平均の集計対象にしない
+   （初回起動時にいきなり過去の未記録期間まで遡って平均を出さないため）。 */
 function studyStartDate(){
   let d = localStorage.getItem(K_START);
   if(!d){ d = todayStr(); localStorage.setItem(K_START, d); }
   return d;
-}
-
-/* 繰越の計算：直近30日分をさかのぼり、目標に届かなかった日の不足分を
-   「借り」として積み上げる。勉強した分（週末含む）は借りを減らす。
-   30日より前まで無限に借金を持ち越さないよう、遡る期間には上限を設けている。 */
-function carryDebtBefore(dateStr){
-  const start = studyStartDate();
-  let debt = 0;
-  for(let i = 30; i >= 1; i--){
-    const d = addDays(dateStr, -i);
-    if(d < start) continue;   // 機能を使い始める前の日は数えない
-    debt = Math.max(0, debt + baseGoalMinutes(d) - studyMinutes(d));
-  }
-  return debt;
-}
-function todayGoalWithCarry(){
-  const t = todayStr();
-  const base = baseGoalMinutes(t);
-  const carry = carryDebtBefore(t);
-  return { base, carry, total: base + carry };
 }
 
 /* ===== 目標受験日 ===== */
@@ -588,7 +568,6 @@ function buildTutorStats(){
     let c=0,w=0; qs.forEach(q=>{const p=progress[q.id]; if(p){c+=p.correctCount;w+=p.wrongCount;}});
     return { domain: dom, questionCount: qs.length, accuracy: (c+w)?Math.round(c/(c+w)*100):null, answered: c+w };
   }).filter(d=>d.questionCount>0);
-  const g = todayGoalWithCarry();
   const t = todayStr();
   const days = []; for(let i=6;i>=0;i--) days.push(addDays(t,-i));
   const weekTotalMin = days.reduce((s,d)=>s+studyMinutes(d),0);
@@ -599,8 +578,7 @@ function buildTutorStats(){
     domainAccuracy: domains,
     studyStreakDays: studyStreak(),
     todayStudyMinutes: studyMinutes(t),
-    todayGoalMinutes: g.base,
-    carryOverMinutes: g.carry,
+    todayGoalMinutes: todayGoalMinutes(),
     last7DaysStudyMinutesTotal: weekTotalMin,
     weakestQuestionsCount: weakQuestions().length,
     examDate: getExamDate() || null,
@@ -684,15 +662,13 @@ function applySM2(id, quality){
 }
 
 // 学習ストリーク：今日 or 昨日を起点に、学習した日が連続何日続いているか
+// studyLog（自動計測＋手動追加分）を基準にする。クイズに回答しなくても
+// 手動で学習時間を追加した日はストリークとして数えたいため。
 function studyStreak(){
-  const days = new Set();
-  Object.values(progress).forEach(p=>{
-    if(p && p.updatedAt) days.add(ymd(new Date(p.updatedAt)));
-  });
   let cursor = todayStr();
-  if(!days.has(cursor)) cursor = addDays(cursor, -1);   // 今日はまだやってなければ昨日から数える
+  if(studyMinutes(cursor) <= 0) cursor = addDays(cursor, -1);   // 今日はまだやってなければ昨日から数える
   let n = 0;
-  while(days.has(cursor)){ n++; cursor = addDays(cursor, -1); }
+  while(studyMinutes(cursor) > 0){ n++; cursor = addDays(cursor, -1); }
   return n;
 }
 
@@ -858,10 +834,10 @@ function emptyState(){
 function renderHome(){
   const streak = studyStreak();
   const streakHtml = streak > 0 ? `<p class="hint center">🔥 ${streak}日連続で学習中</p>` : "";
-  const g = todayGoalWithCarry();
+  const goalMin = todayGoalMinutes();
   const todayMin = studyMinutes(todayStr());
-  const timeHtml = g.total > 0
-    ? `<p class="hint center">⏱ 今日 ${todayMin}分 / 目標${g.total}分${g.carry>0?`（繰越${g.carry}分含む）`:""}</p>`
+  const timeHtml = goalMin > 0
+    ? `<p class="hint center">⏱ 今日 ${todayMin}分 / 平均${goalMin}分</p>`
     : (todayMin>0 ? `<p class="hint center">⏱ 今日 ${todayMin}分</p>` : "");
   const f = getFilter();
   const due = applyFilter(dueQuestions());
@@ -1061,31 +1037,32 @@ function renderStats(){
 /* ===== 学習時間ログ（成績タブに表示） ===== */
 function studyTimeHtml(){
   const t = todayStr();
-  const goal = todayGoalWithCarry();
+  const goalWd = avgStudyMinutes(false);
+  const goalWe = avgStudyMinutes(true);
+  const todayGoal = isWeekend(t) ? goalWe : goalWd;
   const todayMin = studyMinutes(t);
-  const todayPct = goal.total ? Math.min(100, Math.round(todayMin / goal.total * 100)) : (todayMin>0?100:0);
-  const carryNote = goal.carry > 0
-    ? `<p class="hint">内訳: 今日の目標${goal.base}分 ＋ 繰越${goal.carry}分（未消化分）</p>`
-    : (goal.base ? `<p class="hint">今日の目標: ${goal.base}分</p>` : `<p class="hint">今日は目標なしの日です</p>`);
+  const todayPct = todayGoal ? Math.min(100, Math.round(todayMin / todayGoal * 100)) : (todayMin>0?100:0);
+  const goalNote = todayGoal
+    ? `<p class="hint">今日の目標（${isWeekend(t)?"週末":"平日"}に学習した日の平均）: ${todayGoal}分</p>`
+    : `<p class="hint">まだ平均を出せるだけの記録がありません（学習した日ができると自動で目標になります）</p>`;
 
   // 直近7日（今日を含む）
   const days = [];
   for(let i=6; i>=0; i--) days.push(addDays(t, -i));
   const weekTotal = days.reduce((s,d)=>s+studyMinutes(d), 0);
-  const weekGoal = days.reduce((s,d)=>s+(d>=studyStartDate()?baseGoalMinutes(d):0), 0);
   const wLabel = ["日","月","火","水","木","金","土"];
   const start = studyStartDate();
   const dayRows = days.map(d=>{
     const m = studyMinutes(d);
-    const g = (d >= start) ? baseGoalMinutes(d) : 0;   // 記録を始める前の日は目標判定の対象外
+    const g = isWeekend(d) ? goalWe : goalWd;
     const [dy,dm,dd] = d.split("-").map(Number);
     const dow = new Date(dy, dm-1, dd).getDay();
     const label = (d===t?"今日":`${dm}/${dd}`) + `(${wLabel[dow]})`;
     let mark = "";
-    if(g > 0) mark = m >= g ? '<span style="color:var(--ok)">✓達成</span>' : '<span style="color:var(--ng)">未達</span>';
-    else if(d < start) mark = '<span class="hint">記録開始前</span>';
-    else mark = m > 0 ? '<span class="hint">目標外だけど学習</span>' : '<span class="hint">目標なし</span>';
-    return `<div class="stat-line"><span>${label}</span><span>${m}分${g>0?' / 目標'+g+'分':''} ${mark}</span></div>`;
+    if(d < start) mark = '<span class="hint">記録開始前</span>';
+    else if(g > 0) mark = m >= g ? '<span style="color:var(--ok)">✓平均超え</span>' : (m>0 ? '<span class="hint">平均未満</span>' : '<span class="hint">休み</span>');
+    else mark = m > 0 ? '<span class="hint">学習</span>' : '<span class="hint">休み</span>';
+    return `<div class="stat-line"><span>${label}</span><span>${m}分${g>0?' / 平均'+g+'分':''} ${mark}</span></div>`;
   }).join("");
 
   return `
@@ -1094,8 +1071,8 @@ function studyTimeHtml(){
       <p class="muted">今日</p>
       <p class="big" style="font-size:30px">${todayMin}<span style="font-size:16px">分</span></p>
       <div class="bar"><i style="width:${todayPct}%"></i></div>
-      ${carryNote}
-      <p class="stat-line" style="margin-top:14px"><span>直近7日間の合計</span><span>${weekTotal}分 ${weekGoal?`/ 目標${weekGoal}分`:""}</span></p>
+      ${goalNote}
+      <p class="stat-line" style="margin-top:14px"><span>直近7日間の合計</span><span>${weekTotal}分</span></p>
       <div style="margin-top:6px">${dayRows}</div>
     </div>`;
 }
@@ -1116,7 +1093,7 @@ function tutorHtml(){
   const cachedHtml = cached
     ? `<div class="feedback" style="margin-top:10px"><div>${esc(cached.comment)}</div></div>
        <p class="hint" style="margin-top:4px">${daysAgoLabel(cached.at) || "たった今"}のコメント</p>`
-    : `<p class="hint">今の正答率・学習時間・繰越などを踏まえて、先生役がコメントします。</p>`;
+    : `<p class="hint">今の正答率・学習時間などを踏まえて、先生役がコメントします。</p>`;
   return `
     <div class="card">
       <h2>🧑‍🏫 先生に聞く</h2>
@@ -1255,13 +1232,8 @@ function renderSettings(){
   }
   // 1回で組み立てて1回だけ差し込む（以前は += で二度組み立てていて、
   // 追記のたびに画面全体のDOMが作り直されていた）
-  const goal = getGoal();
-  const wdOpts = [30,45,60,90,120].map(v=>
-    `<button class="btn ${goal.weekday===v?'':'secondary'}" style="flex:1;min-width:60px" onclick="setGoal(${v}, ${goal.weekend})">${v}分</button>`
-  ).join("");
-  const weOpts = [0,30,60].map(v=>
-    `<button class="btn ${goal.weekend===v?'':'secondary'}" style="flex:1;min-width:60px" onclick="setGoal(${goal.weekday}, ${v})">${v===0?"目標なし":v+"分"}</button>`
-  ).join("");
+  const goalWd = avgStudyMinutes(false);
+  const goalWe = avgStudyMinutes(true);
   const examDate = getExamDate();
   const examDays = daysUntilExam();
   const examHint = examDate
@@ -1275,10 +1247,9 @@ function renderSettings(){
     </div>
     <div class="card">
       <h2>⏱ 学習時間の目標</h2>
-      <p class="muted">平日1日あたりの目標時間。未達成の日があれば、翌日以降に不足分を繰り越して「成績」タブに表示します。</p>
-      <div class="row" style="flex-wrap:wrap">${wdOpts}</div>
-      <p class="muted" style="margin-top:12px">週末（土日）の目標</p>
-      <div class="row" style="flex-wrap:wrap">${weOpts}</div>
+      <p class="muted">固定値ではなく、これまで実際に学習した日（0分の日＝お休みの日は除く）の平均分数を、平日・週末それぞれで自動計算して「今日の目標」にしています。頑張るほど目標も自然に上がっていきます。</p>
+      <p class="stat-line" style="margin-top:12px"><span>平日の平均</span><span>${goalWd > 0 ? goalWd+"分" : "記録なし"}</span></p>
+      <p class="stat-line"><span>週末の平均</span><span>${goalWe > 0 ? goalWe+"分" : "記録なし"}</span></p>
       <p class="hint" style="margin-top:8px">学習時間はクイズを解いている間の操作間隔から自動計測します（放置・裏で開いたままの時間はカウントされません）。この記録は端末内のみに保存され、クラウド同期はされません。</p>
     </div>
     <div class="card">
