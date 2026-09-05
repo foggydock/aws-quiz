@@ -704,7 +704,7 @@ function startSession(pool, label, limit){
     }
     return q;
   });
-  session = { queue: arr, idx:0, label, done:0, correct:0, answered:false, results:[] };
+  session = { queue: arr, idx:0, label, done:0, correct:0, answered:false, results:[], streak:0, bestStreak:0 };
   view = "quiz";
   startActivity();
   render();
@@ -717,7 +717,8 @@ function answerChoice(qi){
   session.answered = true;
   session.picked = qi;
   const correct = qi === q.answer;
-  if(correct) session.correct++;
+  if(correct){ session.correct++; session.streak++; session.bestStreak = Math.max(session.bestStreak, session.streak); }
+  else session.streak = 0;
   session.done++;
   applySM2(q.id, correct ? 5 : 2);
   session.results.push({ id:q.id, question:q.question, type:"choice", correct,
@@ -734,7 +735,8 @@ function gradeTerm(quality){ // 記述式：自己採点（◎=5, △=3, ✕=1�
   session.termGrade = quality;
   session.done++;
   const correct = quality >= 4;
-  if(correct) session.correct++;
+  if(correct){ session.correct++; session.streak++; session.bestStreak = Math.max(session.bestStreak, session.streak); }
+  else session.streak = 0;
   applySM2(q.id, quality);
   session.results.push({ id:q.id, question:q.question, type:"term", correct,
     myAnswer:session.myAnswer||"", modelAnswer:q.answer, explanation:q.explanation||"", grade:quality });
@@ -792,6 +794,7 @@ function finishSession(){
       <h2>おつかれさまでした 🎉</h2>
       <p class="big">${acc}%</p>
       <p class="muted">${session.correct} / ${session.done} 問正解</p>
+      ${session.bestStreak>=2?`<p class="hint">🔥 最大 ${session.bestStreak}問連続正解</p>`:""}
       <p class="hint">間違えた問題は忘却曲線に沿って近いうちにまた出ます。</p>
       ${reviewBtn}
       <button class="btn secondary" onclick="view='home';session=null;render()">ホームに戻る</button>
@@ -907,7 +910,7 @@ function renderQuiz(){
   $("#app").innerHTML = `
     <div class="quit-row"><button class="quit-btn" onclick="quitSession()">やめる ✕</button></div>
     <div class="card">
-      <div class="progress-dots">${esc(session.label)} ・ ${num} / ${session.queue.length} 問</div>
+      <div class="progress-dots">${esc(session.label)} ・ ${num} / ${session.queue.length} 問${session.streak>=2?` ・ <span style="color:var(--aws);font-weight:800">🔥 ${session.streak}問連続正解中</span>`:""}</div>
       <div>${(q.section?`<span class="tag">${esc(q.section)}</span>`:"")}${q.type==="term"?'<span class="tag">記述</span>':''}</div>
       ${renderHistoryBadge(q)}
       <h2 style="margin-top:8px">${esc(q.question)}</h2>
