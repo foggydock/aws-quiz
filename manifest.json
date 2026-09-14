@@ -2,7 +2,7 @@
   "name": "AWS CLF 問題集",
   "short_name": "CLF問題集",
   "lang": "ja",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",

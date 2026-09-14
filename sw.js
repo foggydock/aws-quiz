@@ -2,12 +2,12 @@
    方針: アプリ本体(index.html等)はキャッシュしてオフラインでも起動できるようにする。
    stale-while-revalidate = まずキャッシュを即返し、裏で最新を取り直して次回に反映。
    ※ questions.json は端末ごとに違う/公開版には無いので precache せず、常にnetwork-onlyで取得する（キャッシュに古い問題数が残るのを防ぐ）。 */
-const CACHE = "awsq-v28";
+const CACHE = "awsq-v29";
 // 同じドメイン（foggydock.github.io）の他のアプリとキャッシュの置き場が共通なので、消すのはこの接頭辞の古い版だけにする
 const CACHE_PREFIX = "awsq-";
+// index.html は入れない（Cloudflare Pages では "/" へ転送され、転送済みの応答を画面遷移に返すと開けなくなる）
 const ASSETS = [
   "./",
-  "./index.html",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png",
@@ -36,7 +36,7 @@ self.addEventListener("fetch", e => {
   e.respondWith(
     caches.match(req).then(cached => {
       const network = fetch(req).then(res => {
-        if (res && res.ok) {
+        if (res && res.ok && !res.redirected) {   // 転送された応答はキャッシュしない
           const copy = res.clone();
           caches.open(CACHE).then(c => c.put(req, copy));
         }
