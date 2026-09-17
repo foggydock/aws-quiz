@@ -1,8 +1,10 @@
 /* AWS CLF 問題集 サービスワーカー
    方針: アプリ本体(index.html等)はキャッシュしてオフラインでも起動できるようにする。
-   stale-while-revalidate = まずキャッシュを即返し、裏で最新を取り直して次回に反映。
+   - ナビゲーション（index.html本体）は network-first：まずネットを試し、失敗時だけキャッシュを返す。
+     これにより、更新をデプロイした直後から新しい画面が出る（オフライン時は従来通りキャッシュで起動）。
+   - それ以外の静的ファイル（アイコン等）は stale-while-revalidate：まずキャッシュを即返し、裏で最新を取り直して次回に反映。
    ※ questions.json は端末ごとに違う/公開版には無いので precache せず、常にnetwork-onlyで取得する（キャッシュに古い問題数が残るのを防ぐ）。 */
-const CACHE = "awsq-v29";
+const CACHE = "awsq-v30";
 // 同じドメイン（foggydock.github.io）の他のアプリとキャッシュの置き場が共通なので、消すのはこの接頭辞の古い版だけにする
 const CACHE_PREFIX = "awsq-";
 // index.html は入れない（Cloudflare Pages では "/" へ転送され、転送済みの応答を画面遷移に返すと開けなくなる）
@@ -33,6 +35,23 @@ self.addEventListener("fetch", e => {
   const url = new URL(req.url);
   if (req.method !== "GET" || url.origin !== self.location.origin) return;
   if (url.pathname.endsWith("questions.json")) { e.respondWith(fetch(req)); return; }
+
+  // ナビゲーション（アプリ本体）は network-first にする。stale-while-revalidateだと
+  // 更新をデプロイしても、次回タブを開き直すまで1回古い画面がそのまま出てしまう
+  // （オフライン時だけキャッシュにフォールバックすれば、それまで通りオフライン起動もできる）。
+  if (req.mode === "navigate") {
+    e.respondWith(
+      fetch(req).then(res => {
+        if (res && res.ok && !res.redirected) {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put(req, copy));
+        }
+        return res;
+      }).catch(() => caches.match(req))
+    );
+    return;
+  }
+
   e.respondWith(
     caches.match(req).then(cached => {
       const network = fetch(req).then(res => {
