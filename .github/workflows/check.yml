@@ -23,4 +23,8 @@ jobs:
           "
 
       - name: Validate manifest.json
-        run: node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest.json: JSON OK')"
+        run: |
+          node -e "
+          JSON.parse(require('fs').readFileSync('manifest.json', 'utf8'));
+          console.log('manifest.json: JSON OK');
+          "
