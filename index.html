@@ -953,7 +953,7 @@ function renderQuiz(){
     <div class="quit-row"><button class="quit-btn" onclick="quitSession()">やめる ✕</button></div>
     <div class="card">
       <div class="progress-dots">${esc(session.label)} ・ ${num} / ${session.queue.length} 問${session.streak>=2?` ・ <span style="color:var(--aws);font-weight:800">🔥 ${session.streak}問連続正解中</span>`:""}</div>
-      <div>${(q.section?`<span class="tag">${esc(q.section)}</span>`:"")}${q.type==="term"?'<span class="tag">記述</span>':''}</div>
+      <div>${(q.section?`<span class="tag">${esc(q.section)}</span>`:"")}<span class="tag">${DIFF_LEVELS.find(lv=>lv.key===difficultyOf(q)).label}</span>${q.type==="term"?'<span class="tag">記述</span>':''}</div>
       ${renderHistoryBadge(q)}
       <h2 style="margin-top:8px">${esc(q.question)}</h2>
       ${body}
